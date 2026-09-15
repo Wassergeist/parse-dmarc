@@ -64,8 +64,7 @@ docker run -d --name parse-dmarc -p 8080:8080 \
 Homebrew on macOS or Linux:
 
 ```bash
-brew tap meysam81/tap
-brew install parse-dmarc
+brew install dmarcguardhq/parse-dmarc
 parse-dmarc --gen-config          # writes a config.json template
 parse-dmarc --config config.json
 ```
