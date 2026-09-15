@@ -4,10 +4,28 @@
 [![Release](https://img.shields.io/github/v/release/dmarcguardhq/parse-dmarc?style=flat-square)](https://github.com/dmarcguardhq/parse-dmarc/releases)
 [![License](https://img.shields.io/github/license/dmarcguardhq/parse-dmarc?style=flat-square)](LICENSE)
 [![Stars](https://img.shields.io/github/stars/dmarcguardhq/parse-dmarc?style=flat-square)](https://github.com/dmarcguardhq/parse-dmarc)
-[![Docker pulls](https://img.shields.io/docker/pulls/meysam81/parse-dmarc?style=flat-square)](https://hub.docker.com/r/meysam81/parse-dmarc)
-[![Image size](https://img.shields.io/docker/image-size/meysam81/parse-dmarc/latest?style=flat-square&label=image)](https://hub.docker.com/r/meysam81/parse-dmarc/tags)
-[![Go Report Card](https://goreportcard.com/badge/github.com/meysam81/parse-dmarc?style=flat-square)](https://goreportcard.com/report/github.com/meysam81/parse-dmarc)
-[![Scope](https://img.shields.io/badge/scope-whole%20repo%20Apache--2.0%2C%20nothing%20gated-1f8b4c?style=flat-square)](#license)
+[![Docker pulls old](https://img.shields.io/docker/pulls/meysam81/parse-dmarc?style=flat-square&label=meysam81%2Fparse-dmarc%20%28old%29)](https://hub.docker.com/r/meysam81/parse-dmarc)
+[![Docker pulls new](https://img.shields.io/docker/pulls/dmarcguard/parse-dmarc?style=flat-square&label=dmarcguard%2Fparse-dmarc%20%28NEW%29)](https://hub.docker.com/r/dmarcguard/parse-dmarc)
+[![Image size](https://img.shields.io/docker/image-size/dmarcguard/parse-dmarc/latest?style=flat-square&label=image)](https://hub.docker.com/r/dmarcguard/parse-dmarc/tags)
+[![Go Report Card](https://goreportcard.com/badge/github.com/dmarcguard/parse-dmarc?style=flat-square)](https://goreportcard.com/report/github.com/dmarcguard/parse-dmarc)
+
+<!-- START doctoc generated TOC please keep comment here to allow auto update -->
+<!-- DON'T EDIT THIS SECTION, INSTEAD RE-RUN doctoc TO UPDATE -->
+
+- [What it does](#what-it-does)
+- [Run it](#run-it)
+- [Get reports flowing](#get-reports-flowing)
+- [Deploy anywhere](#deploy-anywhere)
+  - [Platform as a Service (PaaS)](#platform-as-a-service-paas)
+  - [Self-hosted PaaS](#self-hosted-paas)
+  - [Infrastructure](#infrastructure)
+- [Configuration](#configuration)
+- [Metrics, Grafana and MCP](#metrics-grafana-and-mcp)
+- [Parse DMARC or DMARCguard?](#parse-dmarc-or-dmarcguard)
+- [Roadmap and contributing](#roadmap-and-contributing)
+- [License](#license)
+
+<!-- END doctoc -->
 
 **Read your DMARC aggregate reports in one dashboard. One Go binary, SQLite, no Elasticsearch.**
 

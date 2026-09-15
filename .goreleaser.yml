@@ -60,10 +60,13 @@ dist: .goreleaser-dist
 dockers_v2:
   - id: parse-dmarc
     images:
+      - dmarcguard/parse-dmarc
       - ghcr.io/dmarcguardhq/parse-dmarc
-      - meysam81/parse-dmarc
+      # NOTE: keeping only for backward compatibility to avoid breaking old
+      # clients pulling the images from the previous renames.
       - dmarcguard/dmarcguard
       - ghcr.io/dmarcguardhq/dmarcguard
+      - meysam81/parse-dmarc
     dockerfile: Dockerfile.goreleaser
     tags:
       - "{{ if not .IsSnapshot }}v{{ .Version }}{{ end }}"
