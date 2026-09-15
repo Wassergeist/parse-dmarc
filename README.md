@@ -7,7 +7,6 @@
 [![Docker pulls old](https://img.shields.io/docker/pulls/meysam81/parse-dmarc?style=flat-square&label=meysam81%2Fparse-dmarc%20%28old%29)](https://hub.docker.com/r/meysam81/parse-dmarc)
 [![Docker pulls new](https://img.shields.io/docker/pulls/dmarcguard/parse-dmarc?style=flat-square&label=dmarcguard%2Fparse-dmarc%20%28NEW%29)](https://hub.docker.com/r/dmarcguard/parse-dmarc)
 [![Image size](https://img.shields.io/docker/image-size/dmarcguard/parse-dmarc/latest?style=flat-square&label=image)](https://hub.docker.com/r/dmarcguard/parse-dmarc/tags)
-[![Go Report Card](https://goreportcard.com/badge/github.com/dmarcguard/parse-dmarc?style=flat-square)](https://goreportcard.com/report/github.com/dmarcguard/parse-dmarc)
 
 <!-- START doctoc generated TOC please keep comment here to allow auto update -->
 <!-- DON'T EDIT THIS SECTION, INSTEAD RE-RUN doctoc TO UPDATE -->
@@ -59,7 +58,7 @@ docker run -d --name parse-dmarc -p 8080:8080 \
   -e IMAP_USERNAME=dmarc@example.com \
   -e IMAP_PASSWORD='your-app-password' \
   -v parse-dmarc:/data \
-  dmarcguardhq/parse-dmarc
+  dmarcguard/parse-dmarc
 ```
 
 Homebrew on macOS or Linux:
