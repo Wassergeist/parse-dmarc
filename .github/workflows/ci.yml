@@ -116,6 +116,9 @@ jobs:
           dockerhub-password: ${{ secrets.DOCKERHUB_TOKEN }}
           image-name: ghcr.io/${{ github.repository }}
           image-extra-tags: |
+            dmarcguard/parse-dmarc:latest
+            dmarcguard/parse-dmarc:${{ github.run_id }}
+            dmarcguard/parse-dmarc:${{ github.sha }}
             dmarcguard/dmarcguard:latest
             dmarcguard/dmarcguard:${{ github.run_id }}
             dmarcguard/dmarcguard:${{ github.sha }}
