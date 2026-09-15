@@ -59,7 +59,7 @@ docker run -d --name parse-dmarc -p 8080:8080 \
   -e IMAP_USERNAME=dmarc@example.com \
   -e IMAP_PASSWORD='your-app-password' \
   -v parse-dmarc:/data \
-  ghcr.io/dmarcguardhq/parse-dmarc:latest
+  dmarcguardhq/parse-dmarc
 ```
 
 Homebrew on macOS or Linux:
