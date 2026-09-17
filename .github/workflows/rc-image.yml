@@ -1,0 +1,133 @@
+# Builds this fork's own image and pushes it to GHCR.
+#
+# This file lives only on rc-main and never goes upstream. It is deliberately
+# separate from upstream's ci.yml: that workflow only runs on pushes to main,
+# and it additionally pushes dmarcguard/* and meysam81/* tags to Docker Hub,
+# which needs secrets this fork does not have.
+#
+# No secrets are required here. GITHUB_TOKEN is enough to push to GHCR.
+
+name: rc-image
+
+on:
+  push:
+    branches:
+      - rc-main
+    tags:
+      - "v*-rc*"
+  workflow_dispatch:
+
+# Two runs on the same ref would race for the moving rc-main tag, and the
+# loser would leave it pointing at the older build.
+concurrency:
+  group: rc-image-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Work out image name and tags
+        id: meta
+        run: |
+          set -euo pipefail
+          # GHCR rejects uppercase in the path, the account name is mixed case.
+          owner=$(echo "${GITHUB_REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')
+          image="ghcr.io/${owner}/parse-dmarc"
+          short=$(git rev-parse --short HEAD)
+
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            version="${GITHUB_REF_NAME#v}"
+          else
+            version="rc-main-${short}"
+          fi
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          # Actual build time. github.event.head_commit is absent on
+          # workflow_dispatch, and repository.updated_at means something else.
+          echo "date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+
+          # Written line by line: a multi-line shell variable would carry this
+          # file's indentation into the tags.
+          {
+            echo "tags<<__EOT__"
+            if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+              echo "${image}:${version}"
+            else
+              # Moving tag for the server to pull, plus an immutable one to roll back to.
+              echo "${image}:rc-main"
+              echo "${image}:rc-main-${short}"
+            fi
+            echo "__EOT__"
+          } >> "$GITHUB_OUTPUT"
+
+          # The tag a deployment should actually pin.
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            echo "pinned=${image}:${version}" >> "$GITHUB_OUTPUT"
+          else
+            echo "pinned=${image}:rc-main-${short}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        id: build
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          # A manifest list with attestations can trip up `docker load` and
+          # older daemons; a plain single-platform image keeps the server side
+          # boring. Drop these two once that stops mattering.
+          provenance: false
+          sbom: false
+          build-args: |
+            VERSION=${{ steps.meta.outputs.version }}
+            COMMIT=${{ github.sha }}
+            DATE=${{ steps.meta.outputs.date }}
+            BUILT_BY=github-actions
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Summary
+        run: |
+          set -euo pipefail
+          # Deploy by the immutable tag or the digest, never by the moving
+          # rc-main tag -- otherwise the compose file no longer records what
+          # is actually running, and a rollback is guesswork.
+          {
+            echo "### Pushed"
+            echo
+            echo '```'
+            echo "${TAGS}"
+            echo '```'
+            echo
+            echo "Digest: \`${DIGEST}\`"
+            echo
+            echo "Pin this in docker-compose.yml:"
+            echo
+            echo '```yaml'
+            echo "    image: ${PINNED}"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+        env:
+          TAGS: ${{ steps.meta.outputs.tags }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+          PINNED: ${{ steps.meta.outputs.pinned }}
