@@ -51,5 +51,12 @@ COPY --from=backend-builder /tmp /tmp
 
 EXPOSE 8080
 
+# Match the published image: Dockerfile.goreleaser builds on
+# distroless static-debian12:nonroot, which runs as 65532. Without this the
+# scratch image runs as root, and a container started with cap_drop: ALL
+# loses CAP_DAC_OVERRIDE -- so root cannot write a /data volume owned by
+# 65532 and SQLite fails with "attempt to write a readonly database (8)".
+USER 65532:65532
+
 ENTRYPOINT ["/usr/local/bin/parse-dmarc"]
 CMD ["--config=/app/config.json"]
