@@ -2,6 +2,7 @@ package whois
 
 import (
 	"context"
+	"net"
 	"strings"
 	"sync"
 	"time"
@@ -18,8 +19,13 @@ const (
 	errorTTL = time.Hour
 	// privateTTL applies to reserved ranges: those never change hands.
 	privateTTL = 30 * 24 * time.Hour
-	// lookupPause spaces out requests so we stay a polite RDAP client.
+	// lookupPause spaces out registry requests so we stay a polite client. It
+	// applies only when a registry was actually asked.
 	lookupPause = 250 * time.Millisecond
+	// workers decides how many lookups run at once. Registries rate-limit
+	// bursts, so this stays small; the real speed-up comes from reusing an
+	// answer across every address in the range it covered.
+	workers = 3
 	// queueSize bounds the backlog; beyond it new IPs are dropped and picked
 	// up on the next trigger rather than blocking a caller.
 	queueSize = 256
@@ -37,6 +43,9 @@ type Enricher struct {
 	ttl    time.Duration
 
 	queue chan string
+
+	// ranges remembers which address range each answer covered.
+	ranges rangeIndex
 
 	mu      sync.Mutex
 	pending map[string]struct{}
@@ -59,17 +68,37 @@ func NewEnricher(client *Client, store *storage.Storage, log *zerolog.Logger, tt
 
 // Start drains the queue until ctx is cancelled. Run it in its own goroutine.
 func (e *Enricher) Start(ctx context.Context) {
-	e.log.Info().Dur("ttl", e.ttl).Msg("whois enrichment started")
+	e.seedRanges()
+	e.log.Info().
+		Dur("ttl", e.ttl).
+		Int("workers", workers).
+		Int("known_ranges", e.ranges.Len()).
+		Msg("whois enrichment started")
+
+	var wg sync.WaitGroup
+	for range workers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			e.work(ctx)
+		}()
+	}
+	wg.Wait()
+	e.log.Debug().Msg("whois enrichment stopped")
+}
+
+// work drains the queue until the context is cancelled.
+func (e *Enricher) work(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			e.log.Debug().Msg("whois enrichment stopped")
 			return
 		case ip := <-e.queue:
-			info := e.lookupAndStore(ctx, ip)
+			queried := e.lookupAndStore(ctx, ip)
 			e.done(ip)
-			// Reserved ranges cost no request, so they need no pause.
-			if info.Source != SourcePrivate {
+			// Only an actual registry request earns a pause; a reserved range
+			// or an answer taken from a range we already knew costs nothing.
+			if queried {
 				select {
 				case <-ctx.Done():
 					return
@@ -77,6 +106,25 @@ func (e *Enricher) Start(ctx context.Context) {
 				}
 			}
 		}
+	}
+}
+
+// seedRanges loads the ranges of previous answers, so a restart does not
+// re-query a registry for an address it can already place.
+func (e *Enricher) seedRanges() {
+	cached, err := e.store.GetFreshWhoisRanges(time.Now().Unix())
+	if err != nil {
+		e.log.Debug().Err(err).Msg("could not preload known whois ranges")
+		return
+	}
+	for _, c := range cached {
+		e.ranges.Add(Info{
+			Org:     c.Org,
+			Network: c.Network,
+			CIDR:    c.CIDR,
+			Country: c.Country,
+			Source:  c.Source,
+		})
 	}
 }
 
@@ -125,10 +173,12 @@ func (e *Enricher) done(ip string) {
 	e.mu.Unlock()
 }
 
-// lookupAndStore performs one lookup and caches whatever came back.
-func (e *Enricher) lookupAndStore(ctx context.Context, ip string) Info {
+// lookupAndStore resolves one address and caches the result. It reports
+// whether a registry was actually queried.
+func (e *Enricher) lookupAndStore(ctx context.Context, ip string) bool {
 	start := time.Now()
-	info := e.client.Lookup(ctx, ip)
+
+	info, queried := e.resolve(ctx, ip)
 
 	now := time.Now()
 	ttl := e.ttl
@@ -154,20 +204,47 @@ func (e *Enricher) lookupAndStore(ctx context.Context, ip string) Info {
 
 	if err := e.upsertWithRetry(ctx, entry); err != nil {
 		e.log.Warn().Err(err).Str("ip", ip).Msg("failed to cache whois lookup")
-		return info
+		return queried
 	}
 
 	e.log.Debug().
 		Str("ip", ip).
 		Str("source", info.Source).
 		Str("org", info.Org).
+		Bool("queried_registry", queried).
 		Dur("duration", time.Since(start)).
 		Msg("whois lookup complete")
 
 	if strings.Contains(info.Err, "429") {
 		e.warnRateLimited(ip)
 	}
-	return info
+	return queried
+}
+
+// resolve answers from a known range where possible, and asks a registry
+// otherwise. A report typically lists many relays out of one assignment, so
+// this turns a dozen registry requests into one plus a dozen PTR lookups.
+func (e *Enricher) resolve(ctx context.Context, ip string) (Info, bool) {
+	parsed := net.ParseIP(strings.TrimSpace(ip))
+	if parsed != nil && !isReservedIP(parsed) {
+		if known, ok := e.ranges.Lookup(parsed); ok {
+			known.IP = ip
+			known.Hostname = e.client.Hostname(ctx, ip)
+			return known, false
+		}
+	}
+
+	info := e.client.Lookup(ctx, ip)
+	if info.Source == SourceRDAP || info.Source == SourceWHOIS {
+		e.ranges.Add(Info{
+			Org:     info.Org,
+			Network: info.Network,
+			CIDR:    info.CIDR,
+			Country: info.Country,
+			Source:  info.Source,
+		})
+	}
+	return info, info.Source != SourcePrivate
 }
 
 // upsertWithRetry works around the fetch loop briefly holding the write lock.

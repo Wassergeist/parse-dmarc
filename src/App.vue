@@ -51,9 +51,9 @@ const fetchTopSources = async () => {
   }
 };
 
-// Owners not cached yet are looked up in the background; check back while any
-// row is still pending rather than leaving it that way until the next
-// five-minute refresh.
+// Owners not cached yet are looked up in the background, which usually takes
+// seconds; check back while any row is still pending rather than leaving it
+// that way until the next five-minute refresh.
 const scheduleWhoisRefetch = () => {
   if (whoisRetryTimeout || !topSources.value.some((s) => s.whois_pending))
     return;
@@ -67,7 +67,7 @@ const scheduleWhoisRefetch = () => {
     } catch (error) {
       console.error("Failed to refresh top sources:", error);
     }
-  }, 20 * 1000);
+  }, 6 * 1000);
 };
 
 const fetchReports = async () => {
@@ -149,20 +149,42 @@ const hasOwnerInfo = (source) =>
 
 const ownerName = (source) => source.whois?.org || source.whois?.network || "";
 
+// Where an answer came from. Registries publish different levels of detail,
+// so it matters whether this is the registry itself or only a DNS record.
+const whoisSourceLabels = {
+  rdap: "RDAP (registry)",
+  whois: "WHOIS port 43 (registry)",
+  rdns: "Reverse DNS only, registry unavailable",
+};
+
 // The full detail goes in a native tooltip rather than widening the row.
 const whoisTitle = (source) => {
   if (!hasOwnerInfo(source)) return "";
-  const { org, network, cidr, country, hostname } = source.whois;
+  const {
+    org,
+    network,
+    cidr,
+    country,
+    hostname,
+    looked_up_at,
+    source: via,
+  } = source.whois;
   return [
+    `IP: ${source.source_ip}`,
     org && `Organization: ${org}`,
     network && network !== org && `Network: ${network}`,
     cidr && `Range: ${cidr}`,
     country && `Country: ${country}`,
     hostname && `Reverse DNS: ${hostname}`,
+    via && `Source: ${whoisSourceLabels[via] || via}`,
+    looked_up_at && `Looked up: ${formatLookupTime(looked_up_at)}`,
   ]
     .filter(Boolean)
     .join("\n");
 };
+
+const formatLookupTime = (unixSeconds) =>
+  new Date(unixSeconds * 1000).toLocaleString();
 
 // Lifecycle
 onMounted(() => {
@@ -755,8 +777,9 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  min-width: 240px;
-  max-width: 340px;
+  /* Fixed, so the bars line up whether or not a row has an owner yet. */
+  flex: 0 0 300px;
+  max-width: 300px;
 }
 
 .source-ip {
@@ -1031,7 +1054,7 @@ onUnmounted(() => {
   }
 
   .source-id {
-    min-width: auto;
+    flex: 1 1 auto;
     max-width: 100%;
     margin-bottom: 8px;
   }

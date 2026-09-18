@@ -239,6 +239,17 @@ func (c *Client) Lookup(ctx context.Context, ip string) Info {
 	return info
 }
 
+// Hostname resolves just the PTR record for an address. It is used when the
+// registry answer is already known from another address in the same range:
+// the owner carries over, the hostname does not.
+func (c *Client) Hostname(ctx context.Context, ip string) string {
+	parsed := net.ParseIP(strings.TrimSpace(ip))
+	if parsed == nil || isReservedIP(parsed) {
+		return ""
+	}
+	return c.reverseDNS(ctx, parsed.String())
+}
+
 // reverseDNS returns the first PTR name, or "" if there is none. A missing
 // PTR record is the norm for plenty of senders, so failures stay silent.
 func (c *Client) reverseDNS(ctx context.Context, ip string) string {
