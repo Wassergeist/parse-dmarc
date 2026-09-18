@@ -53,6 +53,16 @@ func TestParseRDAP(t *testing.T) {
 				Country: "DE",
 			},
 		},
+		"RIPE: a named person is never shown as the owner": {
+			fixture: "ripe_individual_contacts.json",
+			why:     "the contacts are individuals; only the abuse desk names the company",
+			want: Info{
+				Org:     "domainfactory",
+				Network: "DOMAINFACTORY-20060601",
+				CIDR:    "80.67.31.0 - 80.67.31.255",
+				Country: "DE",
+			},
+		},
 		"APNIC: no registrant, admin outranks technical": {
 			fixture: "apnic_admin_only.json",
 			want: Info{
@@ -104,6 +114,34 @@ func TestParseRDAP(t *testing.T) {
 func TestParseRDAPRejectsNonJSON(t *testing.T) {
 	if _, err := parseRDAP([]byte("<html>rate limited</html>")); err == nil {
 		t.Fatal("expected an error for a non-JSON body")
+	}
+}
+
+// An organisation entity must win over a contact role naming the same company,
+// and over any individual, whatever their role says.
+func TestParseRDAPPrefersOrganisationEntities(t *testing.T) {
+	got, err := parseRDAP(loadFixture(t, "ripe_placeholder_registrant.json"))
+	if err != nil {
+		t.Fatalf("parseRDAP: %v", err)
+	}
+	if got.Org != "Hetzner Online GmbH" {
+		t.Errorf("Org = %q, want the organisation entity, not a contact role", got.Org)
+	}
+}
+
+func TestTrimAbuseSuffix(t *testing.T) {
+	tests := map[string]string{
+		"domainfactory Abuse": "domainfactory",
+		"Example ABUSE":       "Example",
+		// ARIN names some desks just "Abuse": nothing usable is left, and the
+		// caller falls back to the network name.
+		"Abuse":       "",
+		"Abusix GmbH": "Abusix GmbH",
+	}
+	for in, want := range tests {
+		if got := trimAbuseSuffix(in); got != want {
+			t.Errorf("trimAbuseSuffix(%q) = %q, want %q", in, got, want)
+		}
 	}
 }
 

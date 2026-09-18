@@ -1,0 +1,54 @@
+{
+  "objectClassName": "ip network",
+  "handle": "80.67.31.0 - 80.67.31.255",
+  "name": "DOMAINFACTORY-20060601",
+  "country": "DE",
+  "startAddress": "80.67.31.0",
+  "endAddress": "80.67.31.255",
+  "entities": [
+    {
+      "handle": "JT218-RIPE",
+      "roles": ["technical"],
+      "vcardArray": [
+        "vcard",
+        [
+          ["fn", {}, "text", "Stephan Wolfram"],
+          ["kind", {}, "text", "individual"]
+        ]
+      ]
+    },
+    {
+      "handle": "MNT-DOMAINFACTORY",
+      "roles": ["registrant"],
+      "vcardArray": [
+        "vcard",
+        [
+          ["fn", {}, "text", "MNT-DOMAINFACTORY"],
+          ["kind", {}, "text", "individual"]
+        ]
+      ]
+    },
+    {
+      "handle": "TSM22-RIPE",
+      "roles": ["administrative"],
+      "vcardArray": [
+        "vcard",
+        [
+          ["fn", {}, "text", "Stephan Wolfram"],
+          ["kind", {}, "text", "individual"]
+        ]
+      ]
+    },
+    {
+      "handle": "DFAB1-RIPE",
+      "roles": ["abuse"],
+      "vcardArray": [
+        "vcard",
+        [
+          ["fn", {}, "text", "domainfactory Abuse"],
+          ["kind", {}, "text", "group"]
+        ]
+      ]
+    }
+  ]
+}

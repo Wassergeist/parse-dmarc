@@ -114,10 +114,21 @@ type TopSourceIP struct {
 	// Whois is nil until a lookup has produced something worth showing, so a
 	// client that predates enrichment sees exactly the JSON it saw before.
 	Whois *SourceWhois `json:"whois,omitempty"`
+	// WhoisPending marks a source whose lookup is still outstanding, so the
+	// dashboard can tell "being resolved" apart from "nothing to show". It is
+	// set by the API layer, which knows whether enrichment runs at all.
+	WhoisPending bool `json:"whois_pending,omitempty"`
 	// WhoisExpiresAt is 0 when nothing is cached for this IP. It lets the
 	// enricher spot stale entries without a second query and is deliberately
 	// kept out of the API contract.
 	WhoisExpiresAt int64 `json:"-"`
+}
+
+// WhoisStale reports whether this source still needs a lookup at time now
+// (unix seconds). Missing and expired entries are both stale; it is the one
+// definition the enricher and the API both use.
+func (t *TopSourceIP) WhoisStale(now int64) bool {
+	return t.WhoisExpiresAt < now
 }
 
 // SourceWhois is the display-oriented subset of a cached lookup.
