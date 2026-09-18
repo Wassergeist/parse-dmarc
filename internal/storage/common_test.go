@@ -2,8 +2,10 @@ package storage
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/goccy/go-json"
 
@@ -476,5 +478,105 @@ func TestGetTopSourceIPs_Whois(t *testing.T) {
 		t.Fatal(err)
 	} else if !strings.Contains(string(out), `"whois":{`) {
 		t.Errorf("JSON %s is missing the whois object", out)
+	}
+}
+
+// An entry written by superseded lookup logic must neither be shown nor kept:
+// the fix that stopped naming private individuals would otherwise take a week
+// to reach an existing installation.
+func TestGetTopSourceIPs_SupersededCacheVersion(t *testing.T) {
+	storage, err := NewStorage(":memory:")
+	if err != nil {
+		t.Fatalf("Failed to create storage: %v", err)
+	}
+	defer func() { _ = storage.Close() }()
+
+	fb, err := parser.ParseReport([]byte(reportXML("r1", "none",
+		[4]string{"10", "none", "pass", "pass"},
+	)))
+	if err != nil {
+		t.Fatalf("ParseReport: %v", err)
+	}
+	if err := storage.SaveReport(fb); err != nil {
+		t.Fatalf("SaveReport: %v", err)
+	}
+
+	// Written the way an older release would have: far from expiry, but by
+	// logic we have since replaced.
+	future := time.Now().Add(7 * 24 * time.Hour).Unix()
+	_, err = storage.db.Exec(`
+		INSERT INTO ip_whois (ip, org, network, cidr, country, hostname, source,
+			last_error, looked_up_at, expires_at, lookup_version)
+		VALUES (?, ?, '', '', 'DE', '', 'rdap', '', ?, ?, ?)
+	`, "192.0.2.1", "A Named Person", time.Now().Unix(), future, WhoisCacheVersion-1)
+	if err != nil {
+		t.Fatalf("insert legacy row: %v", err)
+	}
+
+	sources, err := storage.GetTopSourceIPs(10)
+	if err != nil {
+		t.Fatalf("GetTopSourceIPs: %v", err)
+	}
+	if len(sources) != 1 {
+		t.Fatalf("got %d sources, want 1", len(sources))
+	}
+
+	if sources[0].Whois != nil {
+		t.Errorf("superseded entry was shown: %+v", sources[0].Whois)
+	}
+	if !sources[0].WhoisStale(time.Now().Unix()) {
+		t.Error("superseded entry was not treated as stale, so it is never refreshed")
+	}
+
+	// Once re-resolved at the current version it shows again.
+	if err := storage.UpsertIPWhois(&IPWhois{
+		IP: "192.0.2.1", Org: "Example Org", Source: "rdap",
+		LookedUpAt: time.Now().Unix(), ExpiresAt: future,
+	}); err != nil {
+		t.Fatalf("UpsertIPWhois: %v", err)
+	}
+	sources, err = storage.GetTopSourceIPs(10)
+	if err != nil {
+		t.Fatalf("GetTopSourceIPs: %v", err)
+	}
+	if sources[0].Whois == nil || sources[0].Whois.Org != "Example Org" {
+		t.Errorf("re-resolved entry not shown: %+v", sources[0].Whois)
+	}
+	if sources[0].WhoisStale(time.Now().Unix()) {
+		t.Error("a freshly written entry must not look stale")
+	}
+}
+
+// A database created before the column existed must gain it on start.
+func TestMigrateAddsLookupVersion(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "legacy.sqlite")
+
+	storage, err := NewStorage(path)
+	if err != nil {
+		t.Fatalf("Failed to create storage: %v", err)
+	}
+	if _, err := storage.db.Exec(`ALTER TABLE ip_whois DROP COLUMN lookup_version`); err != nil {
+		t.Skipf("this SQLite build cannot drop a column: %v", err)
+	}
+	if err := storage.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	// Reopening runs the migration; a second open must not fail on the column
+	// already being there.
+	for attempt := range 2 {
+		reopened, err := NewStorage(path)
+		if err != nil {
+			t.Fatalf("reopen %d: %v", attempt, err)
+		}
+		if err := reopened.UpsertIPWhois(&IPWhois{
+			IP: "192.0.2.9", Org: "Example Org", Source: "rdap",
+			LookedUpAt: 1700000000, ExpiresAt: 1700600000,
+		}); err != nil {
+			t.Fatalf("upsert after migration: %v", err)
+		}
+		if err := reopened.Close(); err != nil {
+			t.Fatalf("close: %v", err)
+		}
 	}
 }

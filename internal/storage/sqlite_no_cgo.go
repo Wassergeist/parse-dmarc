@@ -10,7 +10,10 @@ import (
 )
 
 func NewStorage(dbPath string) (*Storage, error) {
-	db, err := sql.Open("sqlite", dbPath)
+	// modernc spells pragmas as _pragma=name(value).
+	dsn := withDSNParam(dbPath, fmt.Sprintf("_pragma=busy_timeout(%d)", busyTimeout.Milliseconds()))
+
+	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open database: %w", err)
 	}
@@ -72,7 +75,8 @@ func (s *Storage) init() error {
 		source TEXT NOT NULL DEFAULT '',
 		last_error TEXT NOT NULL DEFAULT '',
 		looked_up_at INTEGER NOT NULL,
-		expires_at INTEGER NOT NULL
+		expires_at INTEGER NOT NULL,
+		lookup_version INTEGER NOT NULL DEFAULT 0
 	);
 
 	CREATE INDEX IF NOT EXISTS idx_ip_whois_expires_at ON ip_whois(expires_at);
@@ -82,5 +86,5 @@ func (s *Storage) init() error {
 		return fmt.Errorf("exec schema: %w", err)
 	}
 
-	return nil
+	return s.migrate()
 }

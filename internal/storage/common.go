@@ -155,6 +155,8 @@ type IPWhois struct {
 	LastError  string
 	LookedUpAt int64
 	ExpiresAt  int64
+	// LookupVersion is the WhoisCacheVersion that produced this entry.
+	LookupVersion int
 }
 
 func (s *Storage) SaveReport(feedback *parser.Feedback) error {
@@ -349,7 +351,11 @@ func (s *Storage) GetTopSourceIPs(limit int) ([]TopSourceIP, error) {
 			t.source_ip, t.total_count, t.pass_count, t.fail_count,
 			COALESCE(w.org, ''), COALESCE(w.network, ''), COALESCE(w.cidr, ''),
 			COALESCE(w.country, ''), COALESCE(w.hostname, ''), COALESCE(w.source, ''),
-			COALESCE(w.looked_up_at, 0), COALESCE(w.expires_at, 0)
+			COALESCE(w.looked_up_at, 0),
+			-- An entry from an older lookup version is expired by definition,
+			-- so an upgrade re-resolves it instead of serving it for days.
+			CASE WHEN COALESCE(w.lookup_version, 0) < ? THEN 0 ELSE COALESCE(w.expires_at, 0) END,
+			COALESCE(w.lookup_version, 0)
 		FROM (
 			SELECT
 				source_ip,
@@ -363,7 +369,10 @@ func (s *Storage) GetTopSourceIPs(limit int) ([]TopSourceIP, error) {
 		) t
 		LEFT JOIN ip_whois w ON w.ip = t.source_ip
 		ORDER BY t.total_count DESC
-	`, limit)
+	`,
+		// Bind order follows the query text: the version in the SELECT list
+		// comes before the subquery's LIMIT.
+		WhoisCacheVersion, limit)
 
 	if err != nil {
 		return nil, fmt.Errorf("query top source IPs: %w", err)
@@ -375,12 +384,18 @@ func (s *Storage) GetTopSourceIPs(limit int) ([]TopSourceIP, error) {
 		var r TopSourceIP
 		var w SourceWhois
 		var source string
+		var version int
 		if err := rows.Scan(
 			&r.SourceIP, &r.Count, &r.Pass, &r.Fail,
 			&w.Org, &w.Network, &w.CIDR, &w.Country, &w.Hostname, &source,
-			&w.LookedUpAt, &r.WhoisExpiresAt,
+			&w.LookedUpAt, &r.WhoisExpiresAt, &version,
 		); err != nil {
 			return nil, fmt.Errorf("scan source IP row: %w", err)
+		}
+		if version < WhoisCacheVersion {
+			// Superseded logic: show nothing rather than an answer we would
+			// no longer produce. The row above already marks it stale.
+			source = ""
 		}
 		// A failed or private lookup is cached to stop us retrying it, but it
 		// has nothing to display: leave Whois nil rather than emit an empty
@@ -407,8 +422,9 @@ const (
 func (s *Storage) UpsertIPWhois(w *IPWhois) error {
 	_, err := s.db.Exec(`
 		INSERT INTO ip_whois (
-			ip, org, network, cidr, country, hostname, source, last_error, looked_up_at, expires_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			ip, org, network, cidr, country, hostname, source, last_error,
+			looked_up_at, expires_at, lookup_version
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(ip) DO UPDATE SET
 			org = excluded.org,
 			network = excluded.network,
@@ -418,8 +434,10 @@ func (s *Storage) UpsertIPWhois(w *IPWhois) error {
 			source = excluded.source,
 			last_error = excluded.last_error,
 			looked_up_at = excluded.looked_up_at,
-			expires_at = excluded.expires_at
-	`, w.IP, w.Org, w.Network, w.CIDR, w.Country, w.Hostname, w.Source, w.LastError, w.LookedUpAt, w.ExpiresAt)
+			expires_at = excluded.expires_at,
+			lookup_version = excluded.lookup_version
+	`, w.IP, w.Org, w.Network, w.CIDR, w.Country, w.Hostname, w.Source, w.LastError,
+		w.LookedUpAt, w.ExpiresAt, WhoisCacheVersion)
 	if err != nil {
 		return fmt.Errorf("upsert ip whois %s: %w", w.IP, err)
 	}
@@ -442,7 +460,8 @@ func (s *Storage) GetIPWhois(ips []string) (map[string]IPWhois, error) {
 		for i, ip := range chunk {
 			args[i] = ip
 		}
-		query := `SELECT ip, org, network, cidr, country, hostname, source, last_error, looked_up_at, expires_at
+		query := `SELECT ip, org, network, cidr, country, hostname, source, last_error,
+			looked_up_at, expires_at, lookup_version
 			FROM ip_whois WHERE ip IN (?` + strings.Repeat(", ?", len(chunk)-1) + `)`
 
 		rows, err := s.db.Query(query, args...)
@@ -452,7 +471,8 @@ func (s *Storage) GetIPWhois(ips []string) (map[string]IPWhois, error) {
 		for rows.Next() {
 			var w IPWhois
 			if err := rows.Scan(&w.IP, &w.Org, &w.Network, &w.CIDR, &w.Country,
-				&w.Hostname, &w.Source, &w.LastError, &w.LookedUpAt, &w.ExpiresAt); err != nil {
+				&w.Hostname, &w.Source, &w.LastError, &w.LookedUpAt, &w.ExpiresAt,
+				&w.LookupVersion); err != nil {
 				_ = rows.Close()
 				return nil, fmt.Errorf("scan ip whois row: %w", err)
 			}
@@ -614,4 +634,39 @@ func (s *Storage) GetDKIMStats() ([]AuthResultStats, error) {
 		stats = append(stats, as)
 	}
 	return stats, nil
+}
+
+// busyTimeout is how long SQLite waits for a lock before giving up. Without
+// it, a dashboard request reading while the enricher writes fails outright
+// with SQLITE_BUSY; the writes involved take milliseconds, so waiting is
+// always the better answer.
+const busyTimeout = 5 * time.Second
+
+// withDSNParam appends a driver-specific parameter to a database path.
+func withDSNParam(dbPath, param string) string {
+	if strings.Contains(dbPath, "?") {
+		return dbPath + "&" + param
+	}
+	return dbPath + "?" + param
+}
+
+// WhoisCacheVersion identifies the lookup logic that produced a cached entry.
+// Bump it whenever a change would make an older entry wrong or unwanted, and
+// every entry written before the change is treated as expired: an upgrade then
+// re-resolves in the background instead of serving stale answers for days.
+//
+// 2: contacts who are natural persons are never named as the owner.
+const WhoisCacheVersion = 2
+
+// migrate applies schema changes to databases created by an earlier version.
+// CREATE TABLE IF NOT EXISTS leaves an existing table alone, so a new column
+// has to be added explicitly.
+func (s *Storage) migrate() error {
+	// SQLite has no ADD COLUMN IF NOT EXISTS; adding one that is already there
+	// is the expected outcome on every start but the first.
+	_, err := s.db.Exec(`ALTER TABLE ip_whois ADD COLUMN lookup_version INTEGER NOT NULL DEFAULT 0`)
+	if err != nil && !strings.Contains(strings.ToLower(err.Error()), "duplicate column") {
+		return fmt.Errorf("add ip_whois.lookup_version: %w", err)
+	}
+	return nil
 }
