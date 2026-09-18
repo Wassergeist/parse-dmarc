@@ -133,11 +133,15 @@ func (t *TopSourceIP) WhoisStale(now int64) bool {
 
 // SourceWhois is the display-oriented subset of a cached lookup.
 type SourceWhois struct {
-	Org        string `json:"org,omitempty"`
-	Network    string `json:"network,omitempty"`
-	CIDR       string `json:"cidr,omitempty"`
-	Country    string `json:"country,omitempty"`
-	Hostname   string `json:"hostname,omitempty"`
+	Org      string `json:"org,omitempty"`
+	Network  string `json:"network,omitempty"`
+	CIDR     string `json:"cidr,omitempty"`
+	Country  string `json:"country,omitempty"`
+	Hostname string `json:"hostname,omitempty"`
+	// Source names where this came from: rdap, whois or rdns. Shown so a
+	// reader can judge the answer, registries disagreeing with each other
+	// being a normal state of affairs.
+	Source     string `json:"source,omitempty"`
 	LookedUpAt int64  `json:"looked_up_at,omitempty"`
 }
 
@@ -402,6 +406,7 @@ func (s *Storage) GetTopSourceIPs(limit int) ([]TopSourceIP, error) {
 		// object the frontend would have to special-case.
 		if source != "" && source != whoisSourceError && source != whoisSourcePrivate {
 			if w.Org != "" || w.Network != "" || w.Hostname != "" || w.Country != "" {
+				w.Source = source
 				r.Whois = &w
 			}
 		}
@@ -414,6 +419,8 @@ func (s *Storage) GetTopSourceIPs(limit int) ([]TopSourceIP, error) {
 // Lookup outcomes stored in ip_whois.source. Kept here rather than in the
 // whois package so storage does not depend on it (whois depends on storage).
 const (
+	whoisSourceRDAP    = "rdap"
+	whoisSourceWHOIS   = "whois"
 	whoisSourcePrivate = "private"
 	whoisSourceError   = "error"
 )
@@ -442,6 +449,37 @@ func (s *Storage) UpsertIPWhois(w *IPWhois) error {
 		return fmt.Errorf("upsert ip whois %s: %w", w.IP, err)
 	}
 	return nil
+}
+
+// GetFreshWhoisRanges returns cached registry answers that still carry a usable
+// address range, so a restart does not have to re-query a range it already
+// knows. Reverse-DNS-only entries are excluded: a PTR record says nothing
+// about the addresses next to it.
+func (s *Storage) GetFreshWhoisRanges(now int64) ([]IPWhois, error) {
+	rows, err := s.db.Query(`
+		SELECT ip, org, network, cidr, country, hostname, source, last_error,
+			looked_up_at, expires_at, lookup_version
+		FROM ip_whois
+		WHERE cidr != '' AND expires_at > ? AND lookup_version = ?
+			AND source IN (?, ?)
+		ORDER BY looked_up_at
+	`, now, WhoisCacheVersion, whoisSourceRDAP, whoisSourceWHOIS)
+	if err != nil {
+		return nil, fmt.Errorf("query whois ranges: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var result []IPWhois
+	for rows.Next() {
+		var w IPWhois
+		if err := rows.Scan(&w.IP, &w.Org, &w.Network, &w.CIDR, &w.Country,
+			&w.Hostname, &w.Source, &w.LastError, &w.LookedUpAt, &w.ExpiresAt,
+			&w.LookupVersion); err != nil {
+			return nil, fmt.Errorf("scan whois range row: %w", err)
+		}
+		result = append(result, w)
+	}
+	return result, nil
 }
 
 // whoisChunkSize keeps the generated IN (...) list well under the SQLite

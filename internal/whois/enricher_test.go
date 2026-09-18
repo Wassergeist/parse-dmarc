@@ -192,3 +192,73 @@ func TestEnricherStopsOnContextCancel(t *testing.T) {
 		t.Fatal("Start did not return after the context was cancelled")
 	}
 }
+
+// The point of the range index: a report listing a dozen relays out of one
+// assignment must cost one registry request, not a dozen.
+func TestEnricherReusesAnswersAcrossARange(t *testing.T) {
+	var hits atomic.Int32
+	fixture := loadFixture(t, "ripe_individual_contacts.json")
+
+	enricher, store := newTestEnricher(t, func(w http.ResponseWriter, _ *http.Request) {
+		hits.Add(1)
+		_, _ = w.Write(fixture)
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go enricher.Start(ctx)
+
+	// Every address below sits in 80.67.31.0 - 80.67.31.255, the range the
+	// fixture covers.
+	ips := []string{"80.67.31.39", "80.67.31.100", "80.67.31.41", "80.67.31.35", "80.67.31.42"}
+	enricher.Enqueue(ips...)
+
+	for _, ip := range ips {
+		entry := waitForEntry(t, store, ip)
+		if entry.Org != "domainfactory" {
+			t.Errorf("%s: Org = %q", ip, entry.Org)
+		}
+		if entry.CIDR != "80.67.31.0 - 80.67.31.255" {
+			t.Errorf("%s: CIDR = %q", ip, entry.CIDR)
+		}
+	}
+
+	// Workers run in parallel, so a second address may start before the first
+	// answer is indexed; what must not happen is one request per address.
+	if got := hits.Load(); got >= int32(len(ips)) {
+		t.Errorf("registry requests = %d for %d addresses in one range", got, len(ips))
+	}
+}
+
+// A restart must not re-query a registry for a range it already knows.
+func TestEnricherSeedsRangesFromCache(t *testing.T) {
+	var hits atomic.Int32
+	fixture := loadFixture(t, "ripe_individual_contacts.json")
+
+	enricher, store := newTestEnricher(t, func(w http.ResponseWriter, _ *http.Request) {
+		hits.Add(1)
+		_, _ = w.Write(fixture)
+	})
+
+	if err := store.UpsertIPWhois(&storage.IPWhois{
+		IP: "80.67.31.1", Org: "domainfactory", Network: "DOMAINFACTORY-20060601",
+		CIDR: "80.67.31.0 - 80.67.31.255", Country: "DE", Source: SourceRDAP,
+		LookedUpAt: time.Now().Unix(), ExpiresAt: time.Now().Add(time.Hour).Unix(),
+	}); err != nil {
+		t.Fatalf("seed cache: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go enricher.Start(ctx)
+
+	enricher.Enqueue("80.67.31.77")
+	entry := waitForEntry(t, store, "80.67.31.77")
+
+	if entry.Org != "domainfactory" {
+		t.Errorf("Org = %q", entry.Org)
+	}
+	if hits.Load() != 0 {
+		t.Errorf("registry requests = %d, want 0 for a range already cached", hits.Load())
+	}
+}
