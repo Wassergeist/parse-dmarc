@@ -348,7 +348,7 @@ Environment variables:
 - `IMAP_USERNAME`
 - `SERVER_HOST`
 - `SERVER_PORT`
-- `WHOIS_ENABLED` - resolve the owner of each sending IP over RDAP plus reverse DNS (default true); the only outbound traffic besides IMAP
+- `WHOIS_ENABLED` - resolve the owner of each sending IP over RDAP, with a port 43 WHOIS fallback, plus reverse DNS (default true); the only outbound traffic besides IMAP
 - `WHOIS_RDAP_URL` - RDAP endpoint an IP is appended to (default `https://rdap.org/ip/`)
 - `WHOIS_TTL_HOURS` - how long a successful lookup stays cached (default 168)
 

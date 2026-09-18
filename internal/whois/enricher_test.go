@@ -34,6 +34,9 @@ func newTestEnricher(t *testing.T, handler http.HandlerFunc) (*Enricher, *storag
 		WithBaseURL(srv.URL+"/ip/"),
 		WithHTTPClient(srv.Client()),
 		WithResolver(&fakeResolver{}),
+		// Keep the enricher tests to the RDAP path and off the network.
+		WithWhoisFallback(false),
+		WithDialer(refuseDial),
 	)
 	log := zerolog.Nop()
 

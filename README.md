@@ -139,7 +139,7 @@ Every setting is an environment variable or a key in `config.json`. Environment 
 | Hours a lookup stays cached   | `WHOIS_TTL_HOURS`                | `168`                                                        |
 | Log level                     | `LOG_LEVEL`                      | `info`                                                       |
 
-Sending sources are resolved to their owner over RDAP, with reverse DNS alongside it, and the results are cached in the database for a week. The lookups are the only traffic this program sends anywhere other than your IMAP server and the receiver of your dashboard; set `WHOIS_ENABLED=false` to turn them off. Private and reserved ranges are never looked up.
+Sending sources are resolved to their owner over RDAP, falling back to classic WHOIS on port 43 when RDAP has no answer, with reverse DNS alongside both. Results are cached in the database for a week. The lookups are the only traffic this program sends anywhere other than your IMAP server and the receiver of your dashboard; set `WHOIS_ENABLED=false` to turn them off. Private and reserved ranges are never looked up.
 
 Providers: Gmail is `imap.gmail.com` on 993 with an App Password. Microsoft 365 is `outlook.office365.com` on 993. Anything else is port 993 with TLS unless its documentation says otherwise.
 

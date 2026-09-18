@@ -3,6 +3,7 @@ package whois
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -15,6 +16,11 @@ import (
 
 // errResolver is a stand-in for any reverse-DNS failure.
 var errResolver = errors.New("resolver unavailable")
+
+// refuseDial fails any connection a test did not explicitly wire up.
+func refuseDial(_ context.Context, network, addr string) (net.Conn, error) {
+	return nil, fmt.Errorf("test tried to dial %s/%s", network, addr)
+}
 
 // fakeResolver stands in for reverse DNS so no test touches the network.
 type fakeResolver struct {
@@ -45,6 +51,10 @@ func newTestClient(t *testing.T, handler http.HandlerFunc, resolver Resolver, op
 		WithBaseURL(srv.URL + "/ip/"),
 		WithHTTPClient(srv.Client()),
 		WithResolver(resolver),
+		// The WHOIS fallback is off unless a test opts in, and the dialer
+		// fails loudly, so no test can reach a real registry by accident.
+		WithWhoisFallback(false),
+		WithDialer(refuseDial),
 	}
 	return New(append(base, opts...)...)
 }

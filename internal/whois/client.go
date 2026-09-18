@@ -1,7 +1,9 @@
 // Package whois resolves the owner of a sending IP address. It queries RDAP
-// (RFC 7482), which returns structured JSON, rather than classic WHOIS, whose
-// free-text output differs per registry; reverse DNS is looked up alongside it
-// because a PTR record is often the name a reader recognises first.
+// (RFC 7482) first, because it answers in structured JSON and bootstraps to
+// the responsible registry on its own, and falls back to classic WHOIS on port
+// 43, whose free-text output differs per registry, when RDAP has no answer.
+// Reverse DNS is looked up alongside both, because a PTR record is often the
+// name a reader recognises first.
 package whois
 
 import (
@@ -18,6 +20,7 @@ import (
 // Outcomes recorded in Info.Source. They are mirrored in the ip_whois table.
 const (
 	SourceRDAP    = "rdap"
+	SourceWHOIS   = "whois"
 	SourceRDNS    = "rdns"
 	SourcePrivate = "private"
 	SourceError   = "error"
@@ -27,7 +30,8 @@ const (
 	defaultRDAPTimeout = 10 * time.Second
 	defaultRDNSTimeout = 3 * time.Second
 	// maxBodySize caps what we read from a registry we do not control.
-	maxBodySize = 1 << 20
+	maxBodySize         = 1 << 20
+	defaultWhoisTimeout = 10 * time.Second
 	// defaultConcurrency stays low: RIR RDAP endpoints rate-limit bursts.
 	defaultConcurrency = 2
 )
@@ -52,13 +56,19 @@ type Resolver interface {
 	LookupAddr(ctx context.Context, addr string) ([]string, error)
 }
 
-// Client performs RDAP and reverse-DNS lookups.
+// Dialer opens a connection, so tests can stand in for the WHOIS port.
+type Dialer func(ctx context.Context, network, addr string) (net.Conn, error)
+
+// Client performs RDAP, WHOIS and reverse-DNS lookups.
 type Client struct {
-	http      *http.Client
-	baseURL   string
-	resolver  Resolver
-	sem       chan struct{}
-	userAgent string
+	http           *http.Client
+	baseURL        string
+	resolver       Resolver
+	sem            chan struct{}
+	userAgent      string
+	dial           Dialer
+	whoisBootstrap string
+	whoisEnabled   bool
 }
 
 // Option configures a Client.
@@ -103,6 +113,31 @@ func WithConcurrency(n int) Option {
 	}
 }
 
+// WithDialer replaces the dialer used for WHOIS, mainly for tests.
+func WithDialer(d Dialer) Option {
+	return func(c *Client) {
+		if d != nil {
+			c.dial = d
+		}
+	}
+}
+
+// WithWhoisBootstrap sets the server asked which registry owns an address.
+func WithWhoisBootstrap(addr string) Option {
+	return func(c *Client) {
+		if addr != "" {
+			c.whoisBootstrap = withWhoisPort(addr)
+		}
+	}
+}
+
+// WithWhoisFallback turns the plaintext WHOIS fallback on or off.
+func WithWhoisFallback(enabled bool) Option {
+	return func(c *Client) {
+		c.whoisEnabled = enabled
+	}
+}
+
 // WithUserAgent sets the User-Agent; registries ask clients to identify.
 func WithUserAgent(ua string) Option {
 	return func(c *Client) {
@@ -114,12 +149,16 @@ func WithUserAgent(ua string) Option {
 
 // New builds a Client with sensible defaults for talking to public registries.
 func New(opts ...Option) *Client {
+	dialer := &net.Dialer{Timeout: defaultWhoisTimeout}
 	c := &Client{
-		http:      &http.Client{Timeout: defaultRDAPTimeout},
-		baseURL:   "https://rdap.org/ip/",
-		resolver:  net.DefaultResolver,
-		sem:       make(chan struct{}, defaultConcurrency),
-		userAgent: "parse-dmarc (+https://github.com/dmarcguardhq/parse-dmarc)",
+		http:           &http.Client{Timeout: defaultRDAPTimeout},
+		baseURL:        "https://rdap.org/ip/",
+		resolver:       net.DefaultResolver,
+		sem:            make(chan struct{}, defaultConcurrency),
+		userAgent:      "parse-dmarc (+https://github.com/dmarcguardhq/parse-dmarc)",
+		dial:           dialer.DialContext,
+		whoisBootstrap: defaultWhoisBootstrap,
+		whoisEnabled:   true,
 	}
 	for _, opt := range opts {
 		opt(c)
@@ -167,6 +206,21 @@ func (c *Client) Lookup(ctx context.Context, ip string) Info {
 
 	info.Hostname = hostname
 	if rdapErr != nil {
+		// RDAP is the better answer but not a universal one: ranges predating
+		// a registry's RDAP deployment, or an RDAP service that is down, still
+		// answer on the classic WHOIS port. Its output is free text with no
+		// schema, which is why it is the fallback rather than the first call.
+		if c.whoisEnabled {
+			fallback, whoisErr := c.whois43(ctx, canonical)
+			if whoisErr == nil {
+				fallback.IP = ip
+				fallback.Hostname = hostname
+				fallback.Source = SourceWHOIS
+				return fallback
+			}
+			rdapErr = fmt.Errorf("%w (whois fallback: %v)", rdapErr, whoisErr)
+		}
+
 		info.Err = rdapErr.Error()
 		// A PTR record alone is still worth showing and worth caching.
 		if hostname != "" {
