@@ -30,6 +30,8 @@ const currentView = ref("dashboard"); // 'dashboard' | 'generator'
 
 // Auto-refresh interval
 let refreshInterval = null;
+// One-shot timer for whois data still being resolved in the background
+let whoisRetryTimeout = null;
 
 // Data fetching
 const fetchStatistics = async () => {
@@ -43,9 +45,24 @@ const fetchStatistics = async () => {
 const fetchTopSources = async () => {
   try {
     topSources.value = await getTopSources(10);
+    scheduleWhoisRefetch();
   } catch (error) {
     console.error("Failed to fetch top sources:", error);
   }
+};
+
+// Owners that were not cached yet are looked up in the background; check back
+// once rather than leaving the row bare until the next five-minute refresh.
+const scheduleWhoisRefetch = () => {
+  if (whoisRetryTimeout || topSources.value.every((s) => s.whois)) return;
+  whoisRetryTimeout = setTimeout(async () => {
+    whoisRetryTimeout = null;
+    try {
+      topSources.value = await getTopSources(10);
+    } catch (error) {
+      console.error("Failed to refresh top sources:", error);
+    }
+  }, 20 * 1000);
 };
 
 const fetchReports = async () => {
@@ -120,6 +137,28 @@ const formatNumber = (num) => {
   return new Intl.NumberFormat().format(num);
 };
 
+// Ownership lookups are filled in by the backend in the background, so a row
+// may arrive bare and gain an owner on a later refresh.
+const hasOwnerInfo = (source) =>
+  Boolean(source.whois?.org || source.whois?.network || source.whois?.hostname);
+
+const ownerName = (source) => source.whois?.org || source.whois?.network || "";
+
+// The full detail goes in a native tooltip rather than widening the row.
+const whoisTitle = (source) => {
+  if (!hasOwnerInfo(source)) return "";
+  const { org, network, cidr, country, hostname } = source.whois;
+  return [
+    org && `Organization: ${org}`,
+    network && network !== org && `Network: ${network}`,
+    cidr && `Range: ${cidr}`,
+    country && `Country: ${country}`,
+    hostname && `Reverse DNS: ${hostname}`,
+  ]
+    .filter(Boolean)
+    .join("\n");
+};
+
 // Lifecycle
 onMounted(() => {
   loadData();
@@ -130,6 +169,9 @@ onMounted(() => {
 onUnmounted(() => {
   if (refreshInterval) {
     clearInterval(refreshInterval);
+  }
+  if (whoisRetryTimeout) {
+    clearTimeout(whoisRetryTimeout);
   }
 });
 </script>
@@ -317,7 +359,29 @@ onUnmounted(() => {
                   :key="source.source_ip"
                   class="source-item"
                 >
-                  <div class="source-ip font-mono">{{ source.source_ip }}</div>
+                  <div class="source-id">
+                    <div class="source-ip font-mono">
+                      {{ source.source_ip }}
+                    </div>
+                    <div class="source-owner" :title="whoisTitle(source)">
+                      <template v-if="hasOwnerInfo(source)">
+                        <span
+                          v-if="source.whois.country"
+                          class="source-country"
+                          >{{ source.whois.country }}</span
+                        >
+                        <span v-if="ownerName(source)" class="source-org">{{
+                          ownerName(source)
+                        }}</span>
+                        <span
+                          v-if="source.whois.hostname"
+                          class="source-host font-mono"
+                          >{{ source.whois.hostname }}</span
+                        >
+                      </template>
+                      <span v-else class="source-owner-empty">&nbsp;</span>
+                    </div>
+                  </div>
                   <div class="source-stats">
                     <div class="source-count">
                       {{ formatNumber(source.count) }} messages
@@ -677,11 +741,59 @@ onUnmounted(() => {
   border: 1px solid var(--border-subtle);
 }
 
+.source-id {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 240px;
+  max-width: 340px;
+}
+
 .source-ip {
   font-weight: 600;
   color: var(--text-main);
-  min-width: 140px;
   font-size: 0.875rem;
+}
+
+.source-owner {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  /* Reserve the line so a row does not jump when the owner arrives. */
+  min-height: 1.2em;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.source-org,
+.source-host {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+/* The owner is the answer to "who is this?", so the hostname gives up room
+   first and the organization name stays readable. */
+.source-org {
+  flex: 0 1 auto;
+}
+
+.source-host {
+  flex: 0 4 auto;
+  opacity: 0.8;
+}
+
+.source-country {
+  flex-shrink: 0;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  font-size: 0.65rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
 }
 
 .source-stats {
@@ -884,9 +996,14 @@ onUnmounted(() => {
     align-items: flex-start;
   }
 
-  .source-ip {
+  .source-id {
     min-width: auto;
+    max-width: 100%;
     margin-bottom: 8px;
+  }
+
+  .source-owner {
+    white-space: normal;
   }
 
   .source-stats {

@@ -1,0 +1,35 @@
+{
+  "objectClassName": "ip network",
+  "handle": "5.9.0.0 - 5.9.255.255",
+  "name": "DE-HETZNER-20110222",
+  "country": "de",
+  "startAddress": "5.9.0.0",
+  "endAddress": "5.9.255.255",
+  "entities": [
+    {
+      "handle": "ORG-HOA1-RIPE",
+      "roles": ["registrant"],
+      "vcardArray": [
+        "vcard",
+        [
+          ["version", {}, "text", "4.0"],
+          ["fn", {}, "text", "Hetzner Online GmbH"],
+          [
+            "adr",
+            {},
+            "text",
+            ["", "", "Industriestr. 25", "Gunzenhausen", "", "91710", "DE"]
+          ]
+        ]
+      ]
+    },
+    {
+      "handle": "HOAC1-RIPE",
+      "roles": ["administrative", "technical"],
+      "vcardArray": [
+        "vcard",
+        [["fn", {}, "text", "Hetzner Online GmbH - Contact Role"]]
+      ]
+    }
+  ]
+}

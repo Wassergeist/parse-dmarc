@@ -3,6 +3,7 @@ package storage
 import (
 	"database/sql"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/goccy/go-json"
@@ -110,6 +111,39 @@ type TopSourceIP struct {
 	Count    int    `json:"count"`
 	Pass     int    `json:"pass"`
 	Fail     int    `json:"fail"`
+	// Whois is nil until a lookup has produced something worth showing, so a
+	// client that predates enrichment sees exactly the JSON it saw before.
+	Whois *SourceWhois `json:"whois,omitempty"`
+	// WhoisExpiresAt is 0 when nothing is cached for this IP. It lets the
+	// enricher spot stale entries without a second query and is deliberately
+	// kept out of the API contract.
+	WhoisExpiresAt int64 `json:"-"`
+}
+
+// SourceWhois is the display-oriented subset of a cached lookup.
+type SourceWhois struct {
+	Org        string `json:"org,omitempty"`
+	Network    string `json:"network,omitempty"`
+	CIDR       string `json:"cidr,omitempty"`
+	Country    string `json:"country,omitempty"`
+	Hostname   string `json:"hostname,omitempty"`
+	LookedUpAt int64  `json:"looked_up_at,omitempty"`
+}
+
+// IPWhois is one cached ownership lookup for a sending IP. Empty fields mean
+// the registry did not publish that detail, not that the lookup failed.
+type IPWhois struct {
+	IP       string
+	Org      string
+	Network  string
+	CIDR     string
+	Country  string
+	Hostname string
+	// Source records how the entry was produced: rdap, rdns, private or error.
+	Source     string
+	LastError  string
+	LookedUpAt int64
+	ExpiresAt  int64
 }
 
 func (s *Storage) SaveReport(feedback *parser.Feedback) error {
@@ -295,17 +329,29 @@ func (s *Storage) GetStatistics() (*Statistics, error) {
 	return &stats, nil
 }
 
+// GetTopSourceIPs returns the busiest sending IPs, each with whatever
+// ownership data is cached for it. Stale cache entries are still returned:
+// a slightly old owner beats a blank row while the enricher refreshes it.
 func (s *Storage) GetTopSourceIPs(limit int) ([]TopSourceIP, error) {
 	rows, err := s.db.Query(`
 		SELECT
-			source_ip,
-			SUM(count) as total_count,
-			SUM(CASE WHEN (dkim_result = 'pass' OR spf_result = 'pass') THEN count ELSE 0 END) as pass_count,
-			SUM(CASE WHEN (dkim_result != 'pass' AND spf_result != 'pass') THEN count ELSE 0 END) as fail_count
-		FROM records
-		GROUP BY source_ip
-		ORDER BY total_count DESC
-		LIMIT ?
+			t.source_ip, t.total_count, t.pass_count, t.fail_count,
+			COALESCE(w.org, ''), COALESCE(w.network, ''), COALESCE(w.cidr, ''),
+			COALESCE(w.country, ''), COALESCE(w.hostname, ''), COALESCE(w.source, ''),
+			COALESCE(w.looked_up_at, 0), COALESCE(w.expires_at, 0)
+		FROM (
+			SELECT
+				source_ip,
+				SUM(count) as total_count,
+				SUM(CASE WHEN (dkim_result = 'pass' OR spf_result = 'pass') THEN count ELSE 0 END) as pass_count,
+				SUM(CASE WHEN (dkim_result != 'pass' AND spf_result != 'pass') THEN count ELSE 0 END) as fail_count
+			FROM records
+			GROUP BY source_ip
+			ORDER BY total_count DESC
+			LIMIT ?
+		) t
+		LEFT JOIN ip_whois w ON w.ip = t.source_ip
+		ORDER BY t.total_count DESC
 	`, limit)
 
 	if err != nil {
@@ -316,13 +362,94 @@ func (s *Storage) GetTopSourceIPs(limit int) ([]TopSourceIP, error) {
 	var results []TopSourceIP
 	for rows.Next() {
 		var r TopSourceIP
-		if err := rows.Scan(&r.SourceIP, &r.Count, &r.Pass, &r.Fail); err != nil {
+		var w SourceWhois
+		var source string
+		if err := rows.Scan(
+			&r.SourceIP, &r.Count, &r.Pass, &r.Fail,
+			&w.Org, &w.Network, &w.CIDR, &w.Country, &w.Hostname, &source,
+			&w.LookedUpAt, &r.WhoisExpiresAt,
+		); err != nil {
 			return nil, fmt.Errorf("scan source IP row: %w", err)
+		}
+		// A failed or private lookup is cached to stop us retrying it, but it
+		// has nothing to display: leave Whois nil rather than emit an empty
+		// object the frontend would have to special-case.
+		if source != "" && source != whoisSourceError && source != whoisSourcePrivate {
+			if w.Org != "" || w.Network != "" || w.Hostname != "" || w.Country != "" {
+				r.Whois = &w
+			}
 		}
 		results = append(results, r)
 	}
 
 	return results, nil
+}
+
+// Lookup outcomes stored in ip_whois.source. Kept here rather than in the
+// whois package so storage does not depend on it (whois depends on storage).
+const (
+	whoisSourcePrivate = "private"
+	whoisSourceError   = "error"
+)
+
+// UpsertIPWhois writes or refreshes the cache entry for one IP.
+func (s *Storage) UpsertIPWhois(w *IPWhois) error {
+	_, err := s.db.Exec(`
+		INSERT INTO ip_whois (
+			ip, org, network, cidr, country, hostname, source, last_error, looked_up_at, expires_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(ip) DO UPDATE SET
+			org = excluded.org,
+			network = excluded.network,
+			cidr = excluded.cidr,
+			country = excluded.country,
+			hostname = excluded.hostname,
+			source = excluded.source,
+			last_error = excluded.last_error,
+			looked_up_at = excluded.looked_up_at,
+			expires_at = excluded.expires_at
+	`, w.IP, w.Org, w.Network, w.CIDR, w.Country, w.Hostname, w.Source, w.LastError, w.LookedUpAt, w.ExpiresAt)
+	if err != nil {
+		return fmt.Errorf("upsert ip whois %s: %w", w.IP, err)
+	}
+	return nil
+}
+
+// whoisChunkSize keeps the generated IN (...) list well under the SQLite
+// parameter limit on older builds.
+const whoisChunkSize = 500
+
+// GetIPWhois returns the cached entries for the given IPs. IPs with nothing
+// cached are simply absent from the map.
+func (s *Storage) GetIPWhois(ips []string) (map[string]IPWhois, error) {
+	result := make(map[string]IPWhois, len(ips))
+	for start := 0; start < len(ips); start += whoisChunkSize {
+		end := min(start+whoisChunkSize, len(ips))
+		chunk := ips[start:end]
+
+		args := make([]interface{}, len(chunk))
+		for i, ip := range chunk {
+			args[i] = ip
+		}
+		query := `SELECT ip, org, network, cidr, country, hostname, source, last_error, looked_up_at, expires_at
+			FROM ip_whois WHERE ip IN (?` + strings.Repeat(", ?", len(chunk)-1) + `)`
+
+		rows, err := s.db.Query(query, args...)
+		if err != nil {
+			return nil, fmt.Errorf("query ip whois: %w", err)
+		}
+		for rows.Next() {
+			var w IPWhois
+			if err := rows.Scan(&w.IP, &w.Org, &w.Network, &w.CIDR, &w.Country,
+				&w.Hostname, &w.Source, &w.LastError, &w.LookedUpAt, &w.ExpiresAt); err != nil {
+				_ = rows.Close()
+				return nil, fmt.Errorf("scan ip whois row: %w", err)
+			}
+			result[w.IP] = w
+		}
+		_ = rows.Close()
+	}
+	return result, nil
 }
 
 func (s *Storage) Close() error {

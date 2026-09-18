@@ -47,7 +47,7 @@ Available tools:
 - get_statistics: Get overall DMARC compliance statistics
 - get_reports: List DMARC reports with pagination
 - get_report_by_id: Get detailed report by ID
-- get_top_source_ips: Get top sending IP addresses
+- get_top_source_ips: Get top sending IP addresses, with owner and reverse DNS when known
 - get_domain_stats: Get per-domain compliance statistics
 - get_org_stats: Get statistics by reporting organization
 - get_spf_stats: Get SPF authentication result statistics
@@ -224,7 +224,7 @@ func (s *Server) registerTools() {
 	// get_top_source_ips - Get top sending IP addresses
 	mcp.AddTool(s.mcpServer, &mcp.Tool{
 		Name:        "get_top_source_ips",
-		Description: "Get the top sending IP addresses ranked by message count. Shows pass/fail breakdown for each IP to help identify potential spoofing sources.",
+		Description: "Get the top sending IP addresses ranked by message count. Shows pass/fail breakdown for each IP to help identify potential spoofing sources. When whois enrichment is enabled, each IP also carries a whois object with the owning organization, network name, CIDR range, country and reverse DNS hostname, which tells a known provider apart from an unknown sender.",
 	}, s.getTopSourceIPs)
 
 	// get_domain_stats - Get per-domain compliance statistics

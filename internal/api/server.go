@@ -14,6 +14,7 @@ import (
 
 	"github.com/meysam81/parse-dmarc/internal/metrics"
 	"github.com/meysam81/parse-dmarc/internal/storage"
+	"github.com/meysam81/parse-dmarc/internal/whois"
 )
 
 //go:embed dist
@@ -25,6 +26,14 @@ type Server struct {
 	metrics *metrics.Metrics
 	log     *zerolog.Logger
 	addr    string
+	// enricher is nil when whois enrichment is disabled.
+	enricher *whois.Enricher
+}
+
+// SetEnricher attaches the background whois enricher. Requests only ever
+// hand it work to do later; they never wait for a lookup.
+func (s *Server) SetEnricher(e *whois.Enricher) {
+	s.enricher = e
 }
 
 // NewServer creates a new API server
@@ -220,6 +229,12 @@ func (s *Server) handleTopSources(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
+	}
+
+	// Whatever is already cached goes out now; anything missing or stale is
+	// looked up in the background and shows up on a later load.
+	if s.enricher != nil {
+		s.enricher.EnqueueStale(sources)
 	}
 
 	s.writeJSON(w, sources)

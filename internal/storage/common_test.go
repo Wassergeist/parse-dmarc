@@ -344,3 +344,137 @@ func TestGetStatistics_Health(t *testing.T) {
 		}
 	}
 }
+
+func TestIPWhois_UpsertAndGet(t *testing.T) {
+	storage, err := NewStorage(":memory:")
+	if err != nil {
+		t.Fatalf("Failed to create storage: %v", err)
+	}
+	defer func() { _ = storage.Close() }()
+
+	entry := &IPWhois{
+		IP: "203.0.114.5", Org: "Example Org", Network: "EXAMPLE-NET",
+		CIDR: "203.0.114.0/24", Country: "DE", Hostname: "mail.example.com",
+		Source: "rdap", LookedUpAt: 1700000000, ExpiresAt: 1700600000,
+	}
+	if err := storage.UpsertIPWhois(entry); err != nil {
+		t.Fatalf("UpsertIPWhois: %v", err)
+	}
+
+	got, err := storage.GetIPWhois([]string{"203.0.114.5", "203.0.114.6"})
+	if err != nil {
+		t.Fatalf("GetIPWhois: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("got %d entries, want 1 (an uncached IP must simply be absent)", len(got))
+	}
+	if got["203.0.114.5"].Org != "Example Org" {
+		t.Errorf("Org = %q", got["203.0.114.5"].Org)
+	}
+
+	// A refreshed lookup must overwrite in place, not accumulate rows.
+	entry.Org = "Renamed Org"
+	entry.LookedUpAt = 1700700000
+	if err := storage.UpsertIPWhois(entry); err != nil {
+		t.Fatalf("UpsertIPWhois (refresh): %v", err)
+	}
+	got, err = storage.GetIPWhois([]string{"203.0.114.5"})
+	if err != nil {
+		t.Fatalf("GetIPWhois: %v", err)
+	}
+	if len(got) != 1 || got["203.0.114.5"].Org != "Renamed Org" {
+		t.Errorf("got %+v, want a single updated row", got)
+	}
+}
+
+// Enrichment is additive: an unenriched source must serialize exactly as it
+// did before the feature existed, so older clients see no change.
+func TestGetTopSourceIPs_Whois(t *testing.T) {
+	storage, err := NewStorage(":memory:")
+	if err != nil {
+		t.Fatalf("Failed to create storage: %v", err)
+	}
+	defer func() { _ = storage.Close() }()
+
+	fb, err := parser.ParseReport([]byte(reportXML("r1", "none",
+		[4]string{"10", "none", "pass", "pass"},
+		[4]string{"5", "none", "fail", "fail"},
+		[4]string{"1", "none", "fail", "fail"},
+	)))
+	if err != nil {
+		t.Fatalf("ParseReport: %v", err)
+	}
+	if err := storage.SaveReport(fb); err != nil {
+		t.Fatalf("SaveReport: %v", err)
+	}
+
+	mustUpsert := func(w *IPWhois) {
+		t.Helper()
+		if err := storage.UpsertIPWhois(w); err != nil {
+			t.Fatalf("UpsertIPWhois: %v", err)
+		}
+	}
+	mustUpsert(&IPWhois{
+		IP: "192.0.2.1", Org: "Example Org", Network: "EXAMPLE-NET",
+		Country: "DE", Hostname: "mail.example.com", Source: "rdap",
+		LookedUpAt: 1700000000, ExpiresAt: 1700600000,
+	})
+	// A failed lookup is cached to avoid retrying it, but has nothing to show.
+	mustUpsert(&IPWhois{
+		IP: "192.0.2.3", Source: "error", LastError: "rdap status 500",
+		LookedUpAt: 1700000000, ExpiresAt: 1700003600,
+	})
+
+	sources, err := storage.GetTopSourceIPs(10)
+	if err != nil {
+		t.Fatalf("GetTopSourceIPs: %v", err)
+	}
+	if len(sources) != 3 {
+		t.Fatalf("got %d sources, want 3", len(sources))
+	}
+
+	byIP := make(map[string]TopSourceIP, len(sources))
+	for _, s := range sources {
+		byIP[s.SourceIP] = s
+	}
+
+	enriched := byIP["192.0.2.1"]
+	if enriched.Whois == nil {
+		t.Fatal("192.0.2.1 has no whois data")
+	}
+	if enriched.Whois.Org != "Example Org" || enriched.Whois.Hostname != "mail.example.com" {
+		t.Errorf("whois = %+v", enriched.Whois)
+	}
+	if enriched.Count != 10 {
+		t.Errorf("Count = %d, want 10 (the join must not disturb the aggregate)", enriched.Count)
+	}
+
+	if byIP["192.0.2.2"].Whois != nil {
+		t.Error("an IP with no cache entry must have no whois object")
+	}
+	if byIP["192.0.2.2"].WhoisExpiresAt != 0 {
+		t.Error("an IP with no cache entry must look stale to the enricher")
+	}
+
+	failed := byIP["192.0.2.3"]
+	if failed.Whois != nil {
+		t.Error("a failed lookup must not produce an empty whois object")
+	}
+	if failed.WhoisExpiresAt == 0 {
+		t.Error("a failed lookup must still be remembered so it is not retried at once")
+	}
+
+	// The JSON contract: absent, not null, when there is nothing to show.
+	out, err := json.Marshal(byIP["192.0.2.2"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(out), "whois") {
+		t.Errorf("JSON %s must omit the whois key entirely", out)
+	}
+	if out, err := json.Marshal(enriched); err != nil {
+		t.Fatal(err)
+	} else if !strings.Contains(string(out), `"whois":{`) {
+		t.Errorf("JSON %s is missing the whois object", out)
+	}
+}

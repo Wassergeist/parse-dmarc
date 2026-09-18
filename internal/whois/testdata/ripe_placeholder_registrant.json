@@ -1,0 +1,43 @@
+{
+  "objectClassName": "ip network",
+  "handle": "5.9.1.0 - 5.9.1.31",
+  "name": "HETZNER-fsn1-dc7",
+  "country": "DE",
+  "startAddress": "5.9.1.0",
+  "endAddress": "5.9.1.31",
+  "entities": [
+    {
+      "handle": "HOAC1-RIPE",
+      "roles": ["administrative", "technical"],
+      "vcardArray": [
+        "vcard",
+        [["fn", {}, "text", "Hetzner Online GmbH - Contact Role"]]
+      ]
+    },
+    {
+      "handle": "HOS-GUN",
+      "roles": ["registrant"],
+      "vcardArray": ["vcard", [["fn", {}, "text", "HOS-GUN"]]]
+    },
+    {
+      "handle": "HOAC1-RIPE",
+      "roles": ["abuse"],
+      "vcardArray": [
+        "vcard",
+        [["fn", {}, "text", "Hetzner Online GmbH - Contact Role"]]
+      ],
+      "entities": [
+        {
+          "handle": "MH375-RIPE",
+          "roles": ["administrative"],
+          "vcardArray": ["vcard", [["fn", {}, "text", "Martin Hetzner"]]]
+        },
+        {
+          "handle": "ORG-HOA1-RIPE",
+          "roles": ["registrant"],
+          "vcardArray": ["vcard", [["fn", {}, "text", "Hetzner Online GmbH"]]]
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,23 @@
+{
+  "objectClassName": "ip network",
+  "handle": "1.1.1.0 - 1.1.1.255",
+  "name": "APNIC-LABS",
+  "country": "AU",
+  "startAddress": "1.1.1.0",
+  "endAddress": "1.1.1.255",
+  "entities": [
+    {
+      "handle": "AIC3-AP",
+      "roles": ["technical"],
+      "vcardArray": ["vcard", [["fn", {}, "text", "APNIC Technical Contact"]]]
+    },
+    {
+      "handle": "IRT-APNICRANDNET-AU",
+      "roles": ["administrative"],
+      "vcardArray": [
+        "vcard",
+        [["fn", {}, "text", "APNIC Research and Development"]]
+      ]
+    }
+  ]
+}
