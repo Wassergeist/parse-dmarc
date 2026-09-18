@@ -310,13 +310,36 @@ func (c *Client) collectAttachments(r io.Reader, depth int) []Attachment {
 			break
 		}
 
-		h, ok := part.Header.(*mail.AttachmentHeader)
-		if !ok {
+		// Reports do not always arrive as a formal attachment: Fastmail
+		// sends its aggregate reports with Content-Disposition: inline,
+		// which go-message surfaces as *mail.InlineHeader (it uses the
+		// same type for text/* parts with no disposition at all). Both
+		// types wrap a message.Header, and AttachmentHeader.Filename
+		// already reads the disposition filename with a Content-Type name
+		// fallback, so wrap the inline header and leave the decision to
+		// isDMARCAttachment below.
+		var h *mail.AttachmentHeader
+		inline := false
+		switch ph := part.Header.(type) {
+		case *mail.AttachmentHeader:
+			h = ph
+		case *mail.InlineHeader:
+			h = &mail.AttachmentHeader{Header: ph.Header}
+			inline = true
+		default:
 			continue
 		}
 
 		filename, _ := h.Filename()
 		contentType, _, _ := h.ContentType()
+
+		// An unnamed inline text part is the human-readable body of the
+		// mail, not a report. Skip it before reading so a large HTML body
+		// is neither buffered nor content-sniffed: a body that merely
+		// quotes "<feedback" must not turn into an attachment.
+		if inline && filename == "" && strings.HasPrefix(strings.ToLower(contentType), "text/") {
+			continue
+		}
 
 		data, err := io.ReadAll(part.Body)
 		if err != nil {

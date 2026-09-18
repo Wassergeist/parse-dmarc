@@ -3,6 +3,7 @@ package imap
 import (
 	"archive/zip"
 	"bytes"
+	"compress/gzip"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -41,6 +42,80 @@ func zipped(t *testing.T) []byte {
 		t.Fatal(err)
 	}
 	return buf.Bytes()
+}
+
+func gzipped(t *testing.T) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	zw := gzip.NewWriter(&buf)
+	if _, err := zw.Write([]byte(feedbackXML)); err != nil {
+		t.Fatal(err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
+
+// Fastmail sends its aggregate reports as an inline part carrying a filename,
+// alongside a plain text body that must not be picked up as a report.
+func TestCollectAttachmentsInlineDisposition(t *testing.T) {
+	msg := "From: reports@fastmaildmarc.com\r\nMIME-Version: 1.0\r\n" +
+		"Content-Type: multipart/mixed; boundary=b\r\n\r\n" +
+		"--b\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n" +
+		"This is an aggregate report for example.com.\r\n" +
+		"--b\r\nContent-Type: application/gzip\r\n" +
+		"Content-Disposition: inline; filename=\"fastmail.com!example.com!1!2.xml.gz\"\r\n" +
+		"Content-Transfer-Encoding: base64\r\n\r\n" +
+		encodeB64(gzipped(t)) + "\r\n--b--\r\n"
+
+	log := zerolog.Nop()
+	c := &Client{log: &log}
+	atts := c.collectAttachments(strings.NewReader(msg), 0)
+	if len(atts) != 1 {
+		t.Fatalf("want 1 attachment, got %d", len(atts))
+	}
+	if atts[0].Filename != "fastmail.com!example.com!1!2.xml.gz" {
+		t.Fatalf("want filename from the inline part, got %q", atts[0].Filename)
+	}
+	if !bytes.HasPrefix(atts[0].Data, []byte{0x1f, 0x8b}) {
+		t.Fatalf("want gzip payload, got %x", atts[0].Data)
+	}
+}
+
+// A text/xml report carrying only a Content-Type name parameter and no
+// Content-Disposition is an InlineHeader to go-message as well; the name
+// fallback must still pick it up.
+func TestCollectAttachmentsInlineNameOnly(t *testing.T) {
+	msg := "From: reporter@example.com\r\nMIME-Version: 1.0\r\n" +
+		"Content-Type: multipart/mixed; boundary=b\r\n\r\n" +
+		"--b\r\nContent-Type: text/xml; name=\"reporter.example!example.com!1!2.xml\"\r\n\r\n" +
+		feedbackXML + "\r\n--b--\r\n"
+
+	log := zerolog.Nop()
+	c := &Client{log: &log}
+	atts := c.collectAttachments(strings.NewReader(msg), 0)
+	if len(atts) != 1 {
+		t.Fatalf("want 1 attachment, got %d", len(atts))
+	}
+	if atts[0].Filename != "reporter.example!example.com!1!2.xml" {
+		t.Fatalf("want filename from the Content-Type name parameter, got %q", atts[0].Filename)
+	}
+}
+
+// An unnamed inline body is never a report, even when it quotes the
+// "<feedback" element the content sniff looks for.
+func TestCollectAttachmentsInlineBodyIsNotAReport(t *testing.T) {
+	msg := "From: someone@example.com\r\nMIME-Version: 1.0\r\n" +
+		"Content-Type: multipart/mixed; boundary=b\r\n\r\n" +
+		"--b\r\nContent-Type: text/html; charset=utf-8\r\n\r\n" +
+		"<p>The report's <feedback> element was empty.</p>\r\n--b--\r\n"
+
+	log := zerolog.Nop()
+	c := &Client{log: &log}
+	if atts := c.collectAttachments(strings.NewReader(msg), 0); len(atts) != 0 {
+		t.Fatalf("want 0 attachments from an HTML-only body, got %d", len(atts))
+	}
 }
 
 // A Google report relayed as a message/rfc822 attachment (the ".msg" case).
