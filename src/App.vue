@@ -400,11 +400,6 @@ onUnmounted(() => {
                         <span v-if="ownerName(source)" class="source-org">{{
                           ownerName(source)
                         }}</span>
-                        <span
-                          v-if="source.whois.hostname"
-                          class="source-host font-mono"
-                          >{{ source.whois.hostname }}</span
-                        >
                       </template>
                       <span
                         v-else-if="source.whois_pending"
@@ -412,6 +407,12 @@ onUnmounted(() => {
                         >Resolving owner…</span
                       >
                       <span v-else class="source-owner-empty">&nbsp;</span>
+                    </div>
+                    <div
+                      class="source-host font-mono"
+                      :title="source.whois?.hostname || ''"
+                    >
+                      {{ source.whois?.hostname || "\u00a0" }}
                     </div>
                   </div>
                   <div class="source-stats">
@@ -788,6 +789,8 @@ onUnmounted(() => {
   font-size: 0.875rem;
 }
 
+/* Owner and hostname each get their own line: side by side, a provider name
+   and a relay hostname both end up truncated in the width available. */
 .source-owner {
   display: flex;
   align-items: center;
@@ -800,22 +803,21 @@ onUnmounted(() => {
   white-space: nowrap;
 }
 
-.source-org,
-.source-host {
+.source-org {
+  flex: 0 1 auto;
   overflow: hidden;
   text-overflow: ellipsis;
   min-width: 0;
 }
 
-/* The owner is the answer to "who is this?", so the hostname gives up room
-   first and the organization name stays readable. */
-.source-org {
-  flex: 0 1 auto;
-}
-
 .source-host {
-  flex: 0 4 auto;
+  font-size: 0.75rem;
+  color: var(--text-muted);
   opacity: 0.8;
+  min-height: 1.2em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* A lookup still in flight must not look like an answer of "unknown". */
@@ -1059,7 +1061,8 @@ onUnmounted(() => {
     margin-bottom: 8px;
   }
 
-  .source-owner {
+  .source-owner,
+  .source-host {
     white-space: normal;
   }
 

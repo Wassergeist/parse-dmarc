@@ -580,3 +580,60 @@ func TestMigrateAddsLookupVersion(t *testing.T) {
 		}
 	}
 }
+
+// Display decides what the report detail may show for one address.
+func TestIPWhoisDisplay(t *testing.T) {
+	usable := IPWhois{
+		IP: "203.0.114.5", Org: "Example Org", Network: "EXAMPLE-NET",
+		Country: "DE", Hostname: "mail.example.com", Source: "rdap",
+		LookedUpAt: 1700000000, ExpiresAt: 1700600000,
+		LookupVersion: WhoisCacheVersion,
+	}
+
+	tests := map[string]struct {
+		mutate func(*IPWhois)
+		want   bool
+	}{
+		"a registry answer is shown":      {func(*IPWhois) {}, true},
+		"reverse DNS alone is shown":      {func(w *IPWhois) { w.Source = "rdns"; w.Org = ""; w.Network = ""; w.Country = "" }, true},
+		"a failure is not":                {func(w *IPWhois) { w.Source = "error"; w.LastError = "rdap status 500" }, false},
+		"a reserved range is not":         {func(w *IPWhois) { w.Source = "private" }, false},
+		"superseded lookup logic is not":  {func(w *IPWhois) { w.LookupVersion = WhoisCacheVersion - 1 }, false},
+		"an entry with no content is not": {func(w *IPWhois) { w.Org, w.Network, w.Country, w.Hostname = "", "", "", "" }, false},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			entry := usable
+			tt.mutate(&entry)
+
+			shown := entry.Display()
+			if (shown != nil) != tt.want {
+				t.Fatalf("Display() = %+v, want shown=%v", shown, tt.want)
+			}
+			if shown != nil && shown.Source != entry.Source {
+				t.Errorf("Source = %q, want %q: a reader must see where it came from",
+					shown.Source, entry.Source)
+			}
+		})
+	}
+}
+
+func TestIPWhoisStale(t *testing.T) {
+	now := int64(1700000000)
+
+	fresh := IPWhois{ExpiresAt: now + 60, LookupVersion: WhoisCacheVersion}
+	if fresh.Stale(now) {
+		t.Error("an unexpired current entry must not be stale")
+	}
+
+	expired := IPWhois{ExpiresAt: now - 1, LookupVersion: WhoisCacheVersion}
+	if !expired.Stale(now) {
+		t.Error("an expired entry must be stale")
+	}
+
+	superseded := IPWhois{ExpiresAt: now + 86400, LookupVersion: WhoisCacheVersion - 1}
+	if !superseded.Stale(now) {
+		t.Error("an entry from older lookup logic must be stale however long it has left")
+	}
+}

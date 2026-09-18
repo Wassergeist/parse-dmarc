@@ -145,6 +145,35 @@ type SourceWhois struct {
 	LookedUpAt int64  `json:"looked_up_at,omitempty"`
 }
 
+// Display returns the part of a cached lookup that may be shown, or nil when
+// there is nothing worth showing: a failure, a reserved range, or an entry
+// produced by lookup logic we have since replaced.
+func (w *IPWhois) Display() *SourceWhois {
+	if w.LookupVersion < WhoisCacheVersion {
+		return nil
+	}
+	if w.Source == "" || w.Source == whoisSourceError || w.Source == whoisSourcePrivate {
+		return nil
+	}
+	if w.Org == "" && w.Network == "" && w.Hostname == "" && w.Country == "" {
+		return nil
+	}
+	return &SourceWhois{
+		Org:        w.Org,
+		Network:    w.Network,
+		CIDR:       w.CIDR,
+		Country:    w.Country,
+		Hostname:   w.Hostname,
+		Source:     w.Source,
+		LookedUpAt: w.LookedUpAt,
+	}
+}
+
+// Stale reports whether this entry needs looking up again at time now.
+func (w *IPWhois) Stale(now int64) bool {
+	return w.LookupVersion < WhoisCacheVersion || w.ExpiresAt < now
+}
+
 // IPWhois is one cached ownership lookup for a sending IP. Empty fields mean
 // the registry did not publish that detail, not that the lookup failed.
 type IPWhois struct {

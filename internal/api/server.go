@@ -13,6 +13,7 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/meysam81/parse-dmarc/internal/metrics"
+	"github.com/meysam81/parse-dmarc/internal/parser"
 	"github.com/meysam81/parse-dmarc/internal/storage"
 	"github.com/meysam81/parse-dmarc/internal/whois"
 )
@@ -192,7 +193,72 @@ func (s *Server) handleReportDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.writeJSON(w, report)
+	s.writeJSON(w, s.withSourceOwners(report))
+}
+
+// reportDetail is a report plus the ownership data for the addresses in it.
+// The report itself stays exactly as parsed: it mirrors the XML the receiver
+// sent, and enrichment is ours, not theirs.
+type reportDetail struct {
+	*parser.Feedback
+	// Whois maps a source address to what is known about who owns it.
+	Whois map[string]storage.SourceWhois `json:"whois,omitempty"`
+	// WhoisPending lists addresses whose lookup is still outstanding.
+	WhoisPending []string `json:"whois_pending,omitempty"`
+}
+
+// withSourceOwners attaches cached ownership data for every address in the
+// report and queues whatever is missing, the same way the dashboard list does.
+func (s *Server) withSourceOwners(report *parser.Feedback) any {
+	if s.enricher == nil || report == nil {
+		return report
+	}
+
+	ips := make([]string, 0, len(report.Records))
+	seen := make(map[string]struct{}, len(report.Records))
+	for i := range report.Records {
+		ip := report.Records[i].Row.SourceIP
+		if ip == "" {
+			continue
+		}
+		if _, dup := seen[ip]; dup {
+			continue
+		}
+		seen[ip] = struct{}{}
+		ips = append(ips, ip)
+	}
+	if len(ips) == 0 {
+		return report
+	}
+
+	cached, err := s.storage.GetIPWhois(ips)
+	if err != nil {
+		// Ownership is an addition to the report, never a reason to fail it.
+		s.log.Debug().Err(err).Msg("could not load whois data for report detail")
+		return report
+	}
+
+	detail := reportDetail{Feedback: report, Whois: make(map[string]storage.SourceWhois, len(cached))}
+	now := time.Now().Unix()
+	var stale []string
+	for _, ip := range ips {
+		entry, found := cached[ip]
+		if !found || entry.Stale(now) {
+			stale = append(stale, ip)
+		}
+		if !found {
+			continue
+		}
+		if shown := entry.Display(); shown != nil {
+			detail.Whois[ip] = *shown
+		}
+	}
+
+	if len(stale) > 0 {
+		s.enricher.Enqueue(stale...)
+		detail.WhoisPending = stale
+	}
+	return detail
 }
 
 // handleStatistics returns dashboard statistics
