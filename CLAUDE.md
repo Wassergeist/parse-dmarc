@@ -240,7 +240,7 @@ go test -v ./internal/parser/...
 
 - `GET /api/statistics` - Dashboard statistics
 - `GET /api/reports` - List reports (paginated: `?limit=50&offset=0`)
-- `GET /api/reports/:id` - Single report details
+- `GET /api/reports/:id` - Single report details, plus a `whois` map of source IP to ownership data and a `whois_pending` list
 - `GET /api/top-sources` - Top sending source IPs, each with an optional `whois` object (org, network, cidr, country, hostname) when enrichment has resolved it
 
 ### Metrics

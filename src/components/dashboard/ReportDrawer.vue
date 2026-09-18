@@ -73,6 +73,47 @@ const formatDate = (timestamp) => {
 };
 
 // Check alignment - simple check if domain matches header_from
+// Ownership comes alongside the report rather than inside it: the report is
+// what the receiver sent, this is what we looked up about the addresses in it.
+const ownerOf = (record) => {
+  const ip = record?.Row?.SourceIP;
+  return ip ? props.report?.whois?.[ip] : undefined;
+};
+
+const isOwnerPending = (record) => {
+  const ip = record?.Row?.SourceIP;
+  return Boolean(ip && props.report?.whois_pending?.includes(ip));
+};
+
+const ownerName = (record) => {
+  const owner = ownerOf(record);
+  return owner?.org || owner?.network || "";
+};
+
+const whoisSourceLabels = {
+  rdap: "RDAP (registry)",
+  whois: "WHOIS port 43 (registry)",
+  rdns: "Reverse DNS only, registry unavailable",
+};
+
+const ownerTitle = (record) => {
+  const owner = ownerOf(record);
+  if (!owner) return "";
+  return [
+    owner.org && `Organization: ${owner.org}`,
+    owner.network && owner.network !== owner.org && `Network: ${owner.network}`,
+    owner.cidr && `Range: ${owner.cidr}`,
+    owner.country && `Country: ${owner.country}`,
+    owner.hostname && `Reverse DNS: ${owner.hostname}`,
+    owner.source &&
+      `Source: ${whoisSourceLabels[owner.source] || owner.source}`,
+    owner.looked_up_at &&
+      `Looked up: ${new Date(owner.looked_up_at * 1000).toLocaleString()}`,
+  ]
+    .filter(Boolean)
+    .join("\n");
+};
+
 const isAligned = (authDomain, record) => {
   if (!authDomain || !record?.Identifiers?.HeaderFrom) return false;
   const headerFrom = record.Identifiers.HeaderFrom.toLowerCase();
@@ -227,8 +268,9 @@ const isAligned = (authDomain, record) => {
               class="record-card"
             >
               <div class="record-header">
-                <div class="record-ip">
+                <div class="record-id" :title="ownerTitle(record)">
                   <svg
+                    class="record-icon"
                     width="16"
                     height="16"
                     viewBox="0 0 24 24"
@@ -241,9 +283,29 @@ const isAligned = (authDomain, record) => {
                     <line x1="6" y1="6" x2="6.01" y2="6" />
                     <line x1="6" y1="18" x2="6.01" y2="18" />
                   </svg>
-                  <span class="font-mono">{{
+                  <span class="record-ip font-mono">{{
                     record.Row?.SourceIP || "N/A"
                   }}</span>
+                  <template v-if="ownerOf(record) || isOwnerPending(record)">
+                    <span class="record-country">{{
+                      ownerOf(record)?.country || ""
+                    }}</span>
+                    <div class="record-owner">
+                      <template v-if="ownerOf(record)">
+                        <span v-if="ownerName(record)" class="record-org">{{
+                          ownerName(record)
+                        }}</span>
+                        <span
+                          v-if="ownerOf(record).hostname"
+                          class="record-host font-mono"
+                          >{{ ownerOf(record).hostname }}</span
+                        >
+                      </template>
+                      <span v-else class="record-owner-loading"
+                        >Resolving owner…</span
+                      >
+                    </div>
+                  </template>
                 </div>
                 <span class="record-count"
                   >{{ record.Row?.Count || 0 }} messages</span
@@ -668,24 +730,99 @@ const isAligned = (authDomain, record) => {
   padding: 12px 16px;
   display: flex;
   justify-content: space-between;
-  align-items: center;
+  /* The address block may run to two lines; the count stays on the first. */
+  align-items: flex-start;
+  gap: 16px;
   border-bottom: 1px solid var(--border-subtle);
   background: var(--bg-card);
 }
 
 .record-ip {
-  display: flex;
-  align-items: center;
-  gap: 8px;
   color: var(--text-main);
   font-weight: 500;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.record-ip svg {
+/* Two columns, so the badge lines up under the icon and the owner under the
+   address, rather than each line starting wherever its content happens to. */
+.record-id {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  column-gap: 8px;
+  row-gap: 4px;
+  align-items: center;
+  min-width: 0;
+}
+
+.record-icon {
+  justify-self: start;
   color: var(--text-muted);
 }
 
+.record-org {
+  flex-shrink: 0;
+  font-size: 0.8125rem;
+  font-weight: 400;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+/* Who the address belongs to sits under the address itself, so the first line
+   carries the address alone. */
+.record-owner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.record-host {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  opacity: 0.8;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.record-country:empty {
+  border: none;
+  background: none;
+  padding: 0;
+}
+
+.record-country {
+  justify-self: start;
+  flex-shrink: 0;
+  /* Empty when the registry published no country: the cell still holds the
+     column so the line below stays aligned. */
+  min-height: 1em;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: var(--bg-app);
+  border: 1px solid var(--border-subtle);
+  font-size: 0.65rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+
+.record-owner-loading {
+  font-size: 0.8125rem;
+  font-style: italic;
+  color: var(--text-muted);
+  opacity: 0.65;
+}
+
 .record-count {
+  flex-shrink: 0;
   font-size: 0.8125rem;
   color: var(--text-muted);
   font-family: var(--font-mono);
