@@ -16,6 +16,7 @@ import (
 	"github.com/meysam81/parse-dmarc/internal/metrics"
 	"github.com/meysam81/parse-dmarc/internal/parser"
 	"github.com/meysam81/parse-dmarc/internal/storage"
+	"github.com/meysam81/parse-dmarc/internal/whois"
 )
 
 func run(ctx context.Context, version, commit, date string) error {
@@ -69,6 +70,21 @@ func run(ctx context.Context, version, commit, date string) error {
 	defer stop()
 
 	server := api.NewServer(store, cfg.Server.Host, cfg.Server.Port, m, log)
+
+	var enricher *whois.Enricher
+	if cfg.Whois.Enabled {
+		client := whois.New(
+			whois.WithBaseURL(cfg.Whois.RDAPURL),
+			whois.WithUserAgent("parse-dmarc/"+version+" (+https://github.com/dmarcguardhq/parse-dmarc)"),
+		)
+		enricher = whois.NewEnricher(client, store, log, time.Duration(cfg.Whois.TTLHours)*time.Hour)
+		server.SetEnricher(enricher)
+		go enricher.Start(ctx)
+		log.Info().Str("rdap_url", cfg.Whois.RDAPURL).Msg("whois enrichment enabled for sending sources")
+	} else {
+		log.Info().Msg("whois enrichment disabled; set WHOIS_ENABLED=true to resolve sending source owners")
+	}
+
 	serverErrChan := make(chan error, 1)
 	go func() {
 		serverErrChan <- server.Start(ctx)
@@ -105,6 +121,7 @@ func run(ctx context.Context, version, commit, date string) error {
 		log.Error().Err(err).Msg("initial fetch failed")
 	}
 	server.RefreshMetrics()
+	warmWhoisCache(store, enricher)
 
 	ticker := time.NewTicker(time.Duration(fetchInterval) * time.Second)
 	defer ticker.Stop()
@@ -116,6 +133,7 @@ func run(ctx context.Context, version, commit, date string) error {
 				log.Error().Err(err).Msg("fetch failed")
 			}
 			server.RefreshMetrics()
+			warmWhoisCache(store, enricher)
 		case <-ctx.Done():
 			log.Info().Msg("shutting down")
 			return nil
@@ -125,6 +143,23 @@ func run(ctx context.Context, version, commit, date string) error {
 			}
 		}
 	}
+}
+
+// warmWhoisCacheSize is how many of the busiest senders are resolved ahead of
+// a dashboard visit, so the owners are usually there before anyone looks.
+const warmWhoisCacheSize = 50
+
+// warmWhoisCache queues the top senders for background enrichment.
+func warmWhoisCache(store *storage.Storage, enricher *whois.Enricher) {
+	if enricher == nil {
+		return
+	}
+	sources, err := store.GetTopSourceIPs(warmWhoisCacheSize)
+	if err != nil {
+		log.Debug().Err(err).Msg("skipping whois warm-up")
+		return
+	}
+	enricher.EnqueueStale(sources)
 }
 
 func fetchReports(cfg *config.Config, store *storage.Storage, m *metrics.Metrics) error {

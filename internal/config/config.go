@@ -5,9 +5,18 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/caarlos0/env/v11"
 	"github.com/goccy/go-json"
+)
+
+const (
+	// DefaultRDAPURL is the bootstrap service that redirects an IP query to
+	// the RIR responsible for that range.
+	DefaultRDAPURL = "https://rdap.org/ip/"
+	// DefaultWhoisTTLHours is how long a successful lookup stays cached.
+	DefaultWhoisTTLHours = 168
 )
 
 var (
@@ -26,6 +35,7 @@ type Config struct {
 	IMAP        IMAPConfig     `json:"imap"`
 	Database    DatabaseConfig `json:"database"`
 	Server      ServerConfig   `json:"server"`
+	Whois       WhoisConfig    `json:"whois"`
 }
 
 // IMAPConfig holds IMAP server configuration
@@ -49,6 +59,17 @@ type IMAPConfig struct {
 
 	MarkAsSeen       bool   `json:"mark_as_seen" env:"IMAP_MARK_AS_SEEN" envDefault:"true"`
 	ProcessedMailbox string `json:"processed_mailbox" env:"IMAP_PROCESSED_MAILBOX"`
+}
+
+// WhoisConfig controls ownership enrichment of sending source IPs. Lookups go
+// out to RDAPURL (which redirects to the responsible RIR) and to the system
+// resolver for reverse DNS; results are cached in the database for TTLHours.
+// Set Enabled to false for deployments that must not talk to anything but the
+// configured IMAP server.
+type WhoisConfig struct {
+	Enabled  bool   `json:"enabled" env:"WHOIS_ENABLED" envDefault:"true"`
+	RDAPURL  string `json:"rdap_url" env:"WHOIS_RDAP_URL" envDefault:"https://rdap.org/ip/"`
+	TTLHours int    `json:"ttl_hours" env:"WHOIS_TTL_HOURS" envDefault:"168"`
 }
 
 // DatabaseConfig holds database configuration
@@ -128,6 +149,15 @@ func Load(path string) (*Config, error) {
 	if cfg.Server.Port == 0 {
 		cfg.Server.Port = 8080
 	}
+	if cfg.Whois.RDAPURL == "" {
+		cfg.Whois.RDAPURL = DefaultRDAPURL
+	}
+	if !strings.HasSuffix(cfg.Whois.RDAPURL, "/") {
+		cfg.Whois.RDAPURL += "/"
+	}
+	if cfg.Whois.TTLHours <= 0 {
+		cfg.Whois.TTLHours = DefaultWhoisTTLHours
+	}
 
 	return &cfg, nil
 }
@@ -173,6 +203,11 @@ func GenerateSample(path string) error {
 		Server: ServerConfig{
 			Port: 8080,
 			Host: "0.0.0.0",
+		},
+		Whois: WhoisConfig{
+			Enabled:  true,
+			RDAPURL:  DefaultRDAPURL,
+			TTLHours: DefaultWhoisTTLHours,
 		},
 	}
 

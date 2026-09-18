@@ -39,7 +39,7 @@ When your DMARC record carries a `rua=` address, mail receivers such as Google, 
 - Fetches reports over IMAP from any mailbox. Reports that Exchange or Outlook forward as `message/rfc822` attachments are unwrapped too.
 - Parses gzip, zip and raw XML, with a 16 MB decompression cap per report.
 - Stores everything in one SQLite file. No database server, no JVM.
-- Shows pass rate, message volume and top sending sources, and opens any report down to its raw records.
+- Shows pass rate, message volume and top sending sources, each resolved to the organization that owns the IP, and opens any report down to its raw records.
 - Generates your `_dmarc` TXT record from a form.
 - Exposes 28 Prometheus metrics and ships a Grafana dashboard.
 - Serves an MCP server, so an AI assistant can query your reports.
@@ -134,7 +134,12 @@ Every setting is an environment variable or a key in `config.json`. Environment 
 | Database file                 | `DATABASE_PATH`                  | `~/.parse-dmarc/db.sqlite`, `/data/parse-dmarc.db` in Docker |
 | HTTP listen                   | `SERVER_HOST`, `SERVER_PORT`     | all interfaces, `8080`                                       |
 | Seconds between fetches       | `FETCH_INTERVAL`                 | `300`                                                        |
+| Resolve who owns sending IPs  | `WHOIS_ENABLED`                  | `true`                                                       |
+| RDAP endpoint for lookups     | `WHOIS_RDAP_URL`                 | `https://rdap.org/ip/`                                       |
+| Hours a lookup stays cached   | `WHOIS_TTL_HOURS`                | `168`                                                        |
 | Log level                     | `LOG_LEVEL`                      | `info`                                                       |
+
+Sending sources are resolved to their owner over RDAP, falling back to classic WHOIS on port 43 when RDAP has no answer, with reverse DNS alongside both. Results are cached in the database for a week. The lookups are the only traffic this program sends anywhere other than your IMAP server and the receiver of your dashboard; set `WHOIS_ENABLED=false` to turn them off. Private and reserved ranges are never looked up.
 
 Providers: Gmail is `imap.gmail.com` on 993 with an App Password. Microsoft 365 is `outlook.office365.com` on 993. Anything else is port 993 with TLS unless its documentation says otherwise.
 

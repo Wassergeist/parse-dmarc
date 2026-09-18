@@ -1,0 +1,37 @@
+{
+  "objectClassName": "ip network",
+  "handle": "NET-209-85-128-0-1",
+  "name": "GOOGLE",
+  "startAddress": "209.85.128.0",
+  "endAddress": "209.85.255.255",
+  "cidr0_cidrs": [{ "v4prefix": "209.85.128.0", "length": 17 }],
+  "entities": [
+    {
+      "handle": "GOGL",
+      "roles": ["registrant"],
+      "vcardArray": [
+        "vcard",
+        [
+          ["version", {}, "text", "4.0"],
+          ["fn", {}, "text", "Google LLC"],
+          [
+            "adr",
+            {
+              "label": "1600 Amphitheatre Parkway\nMountain View\nCA\n94043\nUnited States"
+            },
+            "text",
+            ["", "", "", "", "", "", ""]
+          ],
+          ["kind", {}, "text", "org"]
+        ]
+      ],
+      "entities": [
+        {
+          "handle": "ABUSE5250-ARIN",
+          "roles": ["abuse"],
+          "vcardArray": ["vcard", [["fn", {}, "text", "Abuse"]]]
+        }
+      ]
+    }
+  ]
+}

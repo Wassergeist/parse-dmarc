@@ -241,7 +241,7 @@ go test -v ./internal/parser/...
 - `GET /api/statistics` - Dashboard statistics
 - `GET /api/reports` - List reports (paginated: `?limit=50&offset=0`)
 - `GET /api/reports/:id` - Single report details
-- `GET /api/top-sources` - Top sending source IPs
+- `GET /api/top-sources` - Top sending source IPs, each with an optional `whois` object (org, network, cidr, country, hostname) when enrichment has resolved it
 
 ### Metrics
 
@@ -256,7 +256,7 @@ When running in MCP mode, the following tools are available:
 | `get_statistics`     | Overall DMARC compliance statistics  |
 | `get_reports`        | List reports with pagination         |
 | `get_report_by_id`   | Get detailed report by ID            |
-| `get_top_source_ips` | Top sending IP addresses             |
+| `get_top_source_ips` | Top sending IP addresses, with owner |
 | `get_domain_stats`   | Per-domain compliance stats          |
 | `get_org_stats`      | Stats by reporting organization      |
 | `get_spf_stats`      | SPF authentication result stats      |
@@ -323,6 +323,11 @@ Config via JSON file or environment variables (using caarlos0/env):
   "server": {
     "host": "0.0.0.0",
     "port": 8080
+  },
+  "whois": {
+    "enabled": true,
+    "rdap_url": "https://rdap.org/ip/",
+    "ttl_hours": 168
   }
 }
 ```
@@ -343,6 +348,9 @@ Environment variables:
 - `IMAP_USERNAME`
 - `SERVER_HOST`
 - `SERVER_PORT`
+- `WHOIS_ENABLED` - resolve the owner of each sending IP over RDAP, with a port 43 WHOIS fallback, plus reverse DNS (default true); the only outbound traffic besides IMAP
+- `WHOIS_RDAP_URL` - RDAP endpoint an IP is appended to (default `https://rdap.org/ip/`)
+- `WHOIS_TTL_HOURS` - how long a successful lookup stays cached (default 168)
 
 ## Deployment Options
 
@@ -411,6 +419,9 @@ See `CONTRIBUTING.md` for development setup and contribution guidelines. Key are
 
 - `reports` table: Stores report metadata and raw JSON
 - `records` table: Stores individual record data per report
+- `ip_whois` table: Caches one ownership lookup per sending IP with an expiry;
+  failures and private ranges are cached too, so they are not retried on every
+  dashboard load
 - Build tags (`cgo`/`!cgo`) select SQLite driver at compile time
 
 ### Frontend Embedding

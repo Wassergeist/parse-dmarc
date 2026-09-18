@@ -1,0 +1,10 @@
+{
+  "objectClassName": "ip network",
+  "handle": "NET-BROKEN",
+  "name": "BROKEN-NET",
+  "entities": [
+    { "handle": "A", "roles": ["registrant"], "vcardArray": "not-an-array" },
+    { "handle": "B", "roles": ["technical"], "vcardArray": null },
+    { "handle": "C", "roles": ["abuse"], "vcardArray": ["vcard"] }
+  ]
+}

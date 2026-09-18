@@ -63,6 +63,21 @@ func (s *Storage) init() error {
 	CREATE INDEX IF NOT EXISTS idx_reports_domain ON reports(domain);
 	CREATE INDEX IF NOT EXISTS idx_records_report_id ON records(report_id);
 	CREATE INDEX IF NOT EXISTS idx_records_source_ip ON records(source_ip);
+
+	CREATE TABLE IF NOT EXISTS ip_whois (
+		ip TEXT PRIMARY KEY,
+		org TEXT NOT NULL DEFAULT '',
+		network TEXT NOT NULL DEFAULT '',
+		cidr TEXT NOT NULL DEFAULT '',
+		country TEXT NOT NULL DEFAULT '',
+		hostname TEXT NOT NULL DEFAULT '',
+		source TEXT NOT NULL DEFAULT '',
+		last_error TEXT NOT NULL DEFAULT '',
+		looked_up_at INTEGER NOT NULL,
+		expires_at INTEGER NOT NULL
+	);
+
+	CREATE INDEX IF NOT EXISTS idx_ip_whois_expires_at ON ip_whois(expires_at);
 	`
 
 	if _, err := s.db.Exec(schema); err != nil {
