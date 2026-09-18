@@ -46,6 +46,9 @@ var errNotFound = errors.New("not found in registry")
 // tech contacts, and an abuse desk is still a better answer than nothing.
 var entityRolePriority = []string{"registrant", "administrative", "technical", "abuse"}
 
+// abuseRole is treated specially when naming an owner: see trimAbuseSuffix.
+const abuseRole = "abuse"
+
 // parseRDAP extracts the displayable fields from an RDAP IP network response.
 func parseRDAP(body []byte) (Info, error) {
 	var nw rdapIPNetwork
@@ -92,32 +95,121 @@ func formatCIDR(n rdapIPNetwork) string {
 	return ""
 }
 
-// pickOwner walks the entity tree depth-first and returns the best-ranked
-// vCard full name, along with the entity it came from.
+// pickOwner walks the entity tree depth-first and returns the best name to
+// show as the owner, along with the entity it came from.
+//
+// Ranking is by vCard kind first and role second: a registry may list a whole
+// company under an organisation entity while the administrative contact for
+// the same range is a named employee, and the company is what a reader wants.
 func pickOwner(entities []rdapEntity) (string, *rdapEntity) {
-	bestRank := len(entityRolePriority)
-	var bestName string
+	best := ownerCandidate{kind: kindRankUnusable, role: len(entityRolePriority)}
 	var bestEntity *rdapEntity
 
 	var walk func(list []rdapEntity)
 	walk = func(list []rdapEntity) {
 		for i := range list {
 			e := &list[i]
-			if rank := roleRank(e.Roles); rank < bestRank {
-				// RIPE assignment objects often name themselves after their own
-				// handle ("HOS-GUN"), while the readable company name sits on a
-				// nested organisation entity. Such a placeholder tells a reader
-				// nothing, so keep looking.
-				if name := vcardValue(e.VcardArray, "fn"); name != "" && !strings.EqualFold(name, e.Handle) {
-					bestRank, bestName, bestEntity = rank, name, e
-				}
+			if c, ok := ownerCandidateFor(e); ok && c.betterThan(best) {
+				best, bestEntity = c, e
 			}
 			walk(e.Entities)
 		}
 	}
 	walk(entities)
 
-	return bestName, bestEntity
+	if bestEntity == nil {
+		return "", nil
+	}
+	return best.name, bestEntity
+}
+
+// ownerCandidate is one entity considered as the owner, with its ranking.
+type ownerCandidate struct {
+	name string
+	kind int
+	role int
+}
+
+// betterThan orders candidates: kind first, then role.
+func (c ownerCandidate) betterThan(other ownerCandidate) bool {
+	if c.kind != other.kind {
+		return c.kind < other.kind
+	}
+	return c.role < other.role
+}
+
+// Ranking of the vCard kind. An organisation is what we are looking for; a
+// group (a role account or an abuse desk) names the company too. An
+// individual never qualifies: see ownerCandidateFor.
+const (
+	kindRankOrg = iota
+	kindRankGroup
+	kindRankUnknown
+	kindRankUnusable
+)
+
+// ownerCandidateFor judges whether an entity may name the owner.
+func ownerCandidateFor(e *rdapEntity) (ownerCandidate, bool) {
+	kind := strings.ToLower(vcardValue(e.VcardArray, "kind"))
+	if kind == "individual" {
+		// This is a named human being, usually the technical contact for the
+		// range. Publishing their name on a dashboard would be both wrong
+		// (the reader wants the company) and a needless exposure of personal
+		// data, so they are never a candidate.
+		return ownerCandidate{}, false
+	}
+
+	name := vcardValue(e.VcardArray, "fn")
+	if name == "" {
+		return ownerCandidate{}, false
+	}
+	// RIPE assignment objects often name themselves after their own handle
+	// ("MNT-DOMAINFACTORY"), while the readable name, if any, sits elsewhere.
+	// Such a placeholder tells a reader nothing, so keep looking.
+	if strings.EqualFold(name, e.Handle) {
+		return ownerCandidate{}, false
+	}
+
+	role := roleRank(e.Roles)
+	if role == len(entityRolePriority) {
+		return ownerCandidate{}, false
+	}
+
+	// An abuse desk is named "<company> Abuse"; the desk part is noise in a
+	// column answering "who is this?". If nothing is left, the caller falls
+	// back to the network name.
+	if entityRolePriority[role] == abuseRole {
+		if name = trimAbuseSuffix(name); name == "" {
+			return ownerCandidate{}, false
+		}
+	}
+
+	return ownerCandidate{name: name, kind: kindRank(kind), role: role}, true
+}
+
+func kindRank(kind string) int {
+	switch kind {
+	case "org":
+		return kindRankOrg
+	case "group":
+		return kindRankGroup
+	default:
+		// Not every registry sets kind; such an entity is still usable, it
+		// just loses to one that says what it is.
+		return kindRankUnknown
+	}
+}
+
+// trimAbuseSuffix drops a trailing "abuse" word from an abuse desk's name.
+func trimAbuseSuffix(name string) string {
+	trimmed := strings.TrimSpace(name)
+	if len(trimmed) < len(abuseRole) {
+		return trimmed
+	}
+	if strings.EqualFold(trimmed[len(trimmed)-len(abuseRole):], abuseRole) {
+		return strings.TrimSpace(trimmed[:len(trimmed)-len(abuseRole)])
+	}
+	return trimmed
 }
 
 func roleRank(roles []string) int {

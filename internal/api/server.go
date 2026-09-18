@@ -232,9 +232,15 @@ func (s *Server) handleTopSources(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Whatever is already cached goes out now; anything missing or stale is
-	// looked up in the background and shows up on a later load.
+	// looked up in the background and shows up on a later load. Those rows are
+	// flagged so the dashboard can say they are being resolved rather than
+	// leaving a gap that looks like an answer.
 	if s.enricher != nil {
 		s.enricher.EnqueueStale(sources)
+		now := time.Now().Unix()
+		for i := range sources {
+			sources[i].WhoisPending = sources[i].WhoisStale(now)
+		}
 	}
 
 	s.writeJSON(w, sources)

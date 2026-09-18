@@ -51,14 +51,19 @@ const fetchTopSources = async () => {
   }
 };
 
-// Owners that were not cached yet are looked up in the background; check back
-// once rather than leaving the row bare until the next five-minute refresh.
+// Owners not cached yet are looked up in the background; check back while any
+// row is still pending rather than leaving it that way until the next
+// five-minute refresh.
 const scheduleWhoisRefetch = () => {
-  if (whoisRetryTimeout || topSources.value.every((s) => s.whois)) return;
+  if (whoisRetryTimeout || !topSources.value.some((s) => s.whois_pending))
+    return;
   whoisRetryTimeout = setTimeout(async () => {
     whoisRetryTimeout = null;
     try {
       topSources.value = await getTopSources(10);
+      // Lookups are deliberately paced, so more than one round may be needed
+      // before every row has an answer.
+      scheduleWhoisRefetch();
     } catch (error) {
       console.error("Failed to refresh top sources:", error);
     }
@@ -379,6 +384,11 @@ onUnmounted(() => {
                           >{{ source.whois.hostname }}</span
                         >
                       </template>
+                      <span
+                        v-else-if="source.whois_pending"
+                        class="source-owner-loading"
+                        >Resolving owner…</span
+                      >
                       <span v-else class="source-owner-empty">&nbsp;</span>
                     </div>
                   </div>
@@ -783,6 +793,30 @@ onUnmounted(() => {
 .source-host {
   flex: 0 4 auto;
   opacity: 0.8;
+}
+
+/* A lookup still in flight must not look like an answer of "unknown". */
+.source-owner-loading {
+  color: var(--text-muted);
+  opacity: 0.65;
+  font-style: italic;
+  animation: source-owner-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes source-owner-pulse {
+  0%,
+  100% {
+    opacity: 0.65;
+  }
+  50% {
+    opacity: 0.3;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .source-owner-loading {
+    animation: none;
+  }
 }
 
 .source-country {

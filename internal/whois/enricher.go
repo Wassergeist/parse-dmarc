@@ -84,9 +84,9 @@ func (e *Enricher) Start(ctx context.Context) {
 func (e *Enricher) EnqueueStale(sources []storage.TopSourceIP) {
 	now := time.Now().Unix()
 	stale := make([]string, 0, len(sources))
-	for _, s := range sources {
-		if s.WhoisExpiresAt < now {
-			stale = append(stale, s.SourceIP)
+	for i := range sources {
+		if sources[i].WhoisStale(now) {
+			stale = append(stale, sources[i].SourceIP)
 		}
 	}
 	e.Enqueue(stale...)
