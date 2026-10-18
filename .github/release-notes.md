@@ -14,10 +14,8 @@ docker run -d --name {{ .ProjectName }} -p 8080:8080 \
   -e IMAP_USERNAME=dmarc@example.com \
   -e IMAP_PASSWORD='your-app-password' \
   -v {{ .ProjectName }}:/data \
-  ghcr.io/{{ $slug }}:{{ .Tag }}
+  dmarcguard/{{ .ProjectName }}:{{ .Tag }}
 ```
-
-Also on Docker Hub as `dmarcguard/{{ .ProjectName }}:{{ .Tag }}`.
 
 **Homebrew**
 
