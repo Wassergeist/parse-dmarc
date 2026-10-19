@@ -20,6 +20,8 @@ export default defineConfig({
       threshold: 1024,
     }),
   ],
+  // Relative asset URLs, so a reverse proxy can serve the app under a subpath.
+  base: "./",
   build: {
     outDir: "dist",
     emptyOutDir: true,
