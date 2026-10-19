@@ -2,8 +2,6 @@
 
 Parse DMARC exposes Prometheus metrics at `/metrics` (on by default, `--metrics=false` turns it off) and ships a Grafana dashboard in `grafana/dashboard.json`. This page is the full catalogue plus scrape, alert and provisioning examples. The README has the summary.
 
-Parse DMARC includes production-ready Prometheus metrics for monitoring and alerting. Metrics are enabled by default and exposed at `/metrics`.
-
 ## Available metrics
 
 ### Build Information

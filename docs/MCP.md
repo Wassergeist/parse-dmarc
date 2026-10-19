@@ -12,7 +12,7 @@ Over stdio, for desktop clients that spawn the process:
 parse-dmarc --mcp --config config.json
 ```
 
-Over HTTP with SSE, for remote clients:
+Over Streamable HTTP, served at the root path of the `--mcp-http` address, for remote clients:
 
 ```bash
 parse-dmarc --mcp-http :8081 --config config.json
