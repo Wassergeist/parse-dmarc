@@ -7,6 +7,7 @@
       "matchManagers": ["gomod"],
       "matchDepNames": ["go"],
       "matchDepTypes": ["golang"],
+      "minimumReleaseAge": "0 days",
       "rangeStrategy": "bump"
     }
   ]
